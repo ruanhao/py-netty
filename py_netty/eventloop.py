@@ -29,6 +29,7 @@ class EventLoop:
 
         # poll object
         self._eventfd = eventfd()
+        logger.debug(f"Event FD: {hex(id(self._eventfd))}")
         self._epoll = self._get_poll_obj()
         self._epoll.register(self._eventfd, select.POLLIN)
 
@@ -70,14 +71,16 @@ class EventLoop:
     def close_on_complete(self, fileno) -> Future:
         c = Chunk(b'', close=True)
         self._writeq.put((fileno, c))
-        self.interrupt()
+        self.interrupt('close gracefully')
         return c.future
 
     def close_forcibly(self, fileno, future: Future = None):
         self._closeq.put((fileno, future))
-        self.interrupt()
+        self.interrupt('close forcibly')
 
-    def interrupt(self):
+    def interrupt(self, desc=""):
+        if desc:
+            logger.debug(f"Interrupting event loop({hex(id(self))}) (EventFD:{hex(id(self._eventfd))}): {desc}")
         self._eventfd.unsafe_write()
 
     def unregister(self, fileno):
@@ -143,9 +146,12 @@ class EventLoop:
     def stop(self):
         logger.debug("stopping epoll")
         self._stop_polling = True
-        self.interrupt()
+        self.interrupt('stop epoll')
 
     def add_flag(self, fileno, flag):
+        if fileno not in self._flags:  # eg. sock receives EOF from peer and after a while invoke close() locally
+            # logger.debug(f"fd({fileno}) not in flags")
+            return
         if self._flags[fileno] & flag:
             return
         self._flags[fileno] |= flag
@@ -162,7 +168,8 @@ class EventLoop:
             chunk.future.set_result(True)
             return
         if fileno not in self._pendings:
-            self._pendings[fileno] = [chunk]
+            if fileno in self._socks:  # ensure the socket is still alive
+                self._pendings[fileno] = [chunk]
         else:
             self._pendings[fileno].append(chunk)
         self.add_flag(fileno, select.POLLOUT)
@@ -172,7 +179,7 @@ class EventLoop:
             assert self._thread is not None, "EventLoop not started yet"
             chunk = Chunk(buffer)
             self._writeq.put((fileno, chunk))
-            self.interrupt()
+            self.interrupt('write buffer')
             return chunk.future
 
         if not buffer:
@@ -228,7 +235,7 @@ class EventLoop:
         for fileno, flag in events:
             flags = []
             if fileno == self._eventfd.fileno():
-                fdname = "eventfd"
+                fdname = f"EventFD({hex(id(self._eventfd))})"
             elif self._server_socket.get(fileno, False):
                 fdname = f"server({fileno})"
             elif fileno in self._socks:
@@ -272,6 +279,7 @@ class EventLoop:
     def _start(self):
         self._thread = threading.current_thread()
         self._start_barrier.set()
+        logger.debug(f"EventLoop({id(self)}) started")
         while True:
             if self._stop_polling:
                 self._epoll.close()
@@ -341,6 +349,7 @@ class EventLoop:
                         self._handlers[fileno].channel_read(self._contexts[fileno], buffer)
                         # logger.info("receive: %s bytes: %s", len(buffer), buffer.decode('utf-8').replace('\n', '\\n'))
                     else:       # EOF
+                        logger.debug("EOF: %s", sockinfo(self._socks[fileno]))
                         self._on_sock_close(fileno)
                         continue
                 if event & select.POLLHUP:

@@ -21,7 +21,7 @@ class AbstractChannelHandler(abc.ABC):
         pass
 
 
-class NoOpChannelHandler(AbstractChannelHandler):
+class ChannelHandlerAdapter(AbstractChannelHandler):
     def channel_active(self, ctx):
         pass
 
@@ -30,6 +30,9 @@ class NoOpChannelHandler(AbstractChannelHandler):
 
     def channel_inactive(self, ctx):
         pass
+
+
+NoOpChannelHandler = ChannelHandlerAdapter
 
 
 class LoggingChannelHandler(AbstractChannelHandler):
