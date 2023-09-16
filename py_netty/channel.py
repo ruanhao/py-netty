@@ -21,7 +21,7 @@ class AbstractChannel:
         return self._close_future
 
     def write(self, buffer) -> Future:
-        self._eventloop.write(self._fileno, buffer)
+        return self._eventloop.write(self._fileno, buffer)
 
     def close(self, force=False):
         if force:

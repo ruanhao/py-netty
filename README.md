@@ -29,7 +29,6 @@ from py_netty.handler import NoOpChannelHandler
 
 
 class HttpHandler(NoOpChannelHandler):
-
     def channel_read(self, ctx, buffer):
         print(buffer.decode('utf-8'))
 
@@ -38,6 +37,7 @@ b = Bootstrap(handler=HttpHandler())
 channel = b.connect(remote_address, remote_port).sync().channel()
 request = f'GET / HTTP/1.1\r\nHost: {remote_address}\r\n\r\n'
 channel.write(request.encode('utf-8'))
+input() # pause
 channel.close()
 ```
 
