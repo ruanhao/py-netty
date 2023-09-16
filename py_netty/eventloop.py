@@ -75,9 +75,9 @@ class EventLoop:
         self.interrupt('close gracefully')
         return c.future
 
-    def close_forcibly(self, fileno, future: Future = None):
+    def close_forcibly(self, fileno, future: Future = None, reason: str = None):
         self._closeq.put((fileno, future))
-        self.interrupt('close forcibly')
+        self.interrupt(reason or 'close forcibly')
 
     def interrupt(self, desc=""):
         if desc:
@@ -210,7 +210,7 @@ class EventLoop:
     def _process_task_queue(self):
         while not self._taskq.empty():
             task = self._taskq.get()
-            # logger.debug(f"Runing task: {task}")
+            logger.debug(f"Runing task: {task}")
             task()
             self._total_tasks_processed += 1
 
@@ -300,7 +300,6 @@ class EventLoop:
 
             self._process_close_queue()
             self._process_write_queue()
-            self._process_task_queue()
 
             for fileno, event in events:
                 if fileno == self._eventfd.fileno():  # just to wake up from epoll
@@ -327,7 +326,7 @@ class EventLoop:
                         head, *tail = chunks
                         if head.close:  # denote to close locally
                             logger.debug("Close ON_COMPLETE: %s", sockinfo(self._socks[fileno]))
-                            self.close_forcibly(fileno, head.future)
+                            self.close_forcibly(fileno, head.future, 'chunk with close flag')
                             break
                         l0 = len(head.buffer)
                         head.buffer = sendall(self._socks[fileno], head.buffer)
@@ -343,7 +342,7 @@ class EventLoop:
                     if not chunks:
                         self.remove_flag(fileno, select.POLLOUT)
 
-                if event & select.POLLIN:
+                if event & select.POLLIN and fileno in self._socks:
                     buffer = recvall(self._socks[fileno])
                     self._total_received += len(buffer)
                     if buffer:
@@ -356,6 +355,8 @@ class EventLoop:
                 if event & select.POLLHUP:
                     if not event & select.POLLIN:
                         self._on_sock_close(fileno)
+
+            self._process_task_queue()
 
     def start(self):
         if self._start_barrier.is_set():

@@ -12,8 +12,8 @@ class HttpHandler(NoOpChannelHandler):
 
 
 def http_client(remote_address, remote_port):
-    b = Bootstrap(handler=HttpHandler())
-    channel = b.connect(remote_address, remote_port).sync()
+    b = Bootstrap(handler_initializer=HttpHandler)
+    channel = b.connect(remote_address, remote_port).channel()
     request = f'GET / HTTP/1.1\r\nHost: {remote_address}\r\n\r\n'
     channel.write(request.encode('utf-8'))
 
