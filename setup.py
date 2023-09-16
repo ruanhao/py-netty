@@ -7,7 +7,7 @@ long_description = (this_directory / "README.md").read_text()
 # install_requires = (this_directory / 'requirements.txt').read_text().splitlines()
 
 
-epoch = 5
+epoch = 7
 
 major = int(epoch / 100 / 100)
 minor = int(epoch / 100 % 100)
@@ -25,7 +25,7 @@ config = {
     'keywords': ['network', 'tcp'],
     'version': f'{major}.{minor}.{micro}',
     'packages': find_packages(),
-    'install_requires': ['qqutils'],
+    'install_requires': [],
     'python_requires': ">=3.7, <4",
     'setup_requires': ['wheel'],
     'classifiers': [
