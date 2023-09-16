@@ -1,4 +1,5 @@
 import queue
+from typing import Callable
 import itertools
 import select
 import socket
@@ -8,8 +9,8 @@ from .bytebuf import Chunk
 from .eventfd import eventfd
 from concurrent.futures import Future, ThreadPoolExecutor
 from .utils import create_thread_pool, sockinfo, sendall, recvall, acceptall, log, LoggerAdapter
-from .channel import AbstractChannel, NioSocketChannel, NioServerSocketChannel, ChannelFuture, ChannelContext
-from .handler import AbstractChannelHandler, NoOpChannelHandler
+from .channel import NioSocketChannel, NioServerSocketChannel, ChannelFuture, ChannelContext
+from .handler import DefaultChannelHandler
 from dataclasses import dataclass
 
 
@@ -107,13 +108,13 @@ class EventLoop:
             self,
             connection: socket.socket,
             is_server: bool = False,
-            handler: AbstractChannelHandler = None,
+            handler_initializer: Callable = None,  # channel_initializer() -> ChannelHandler
             channel_future: ChannelFuture = None
     ) -> ChannelFuture:
         self.start()            # make sure the loop is started
         if not self.in_event_loop():
             cf = ChannelFuture()
-            self.submit_task(lambda: self.register(connection, is_server, handler, cf))
+            self.submit_task(lambda: self.register(connection, is_server, handler_initializer, cf))
             return cf
         connection.setblocking(0)
         flag = select.POLLIN | select.POLLHUP
@@ -128,7 +129,7 @@ class EventLoop:
         logger.debug(f"Registered {sockinfo(connection)}, flag: {flag}")
         self._socks[connection.fileno()] = connection
         self._server_socket[connection.fileno()] = is_server
-        self._handlers[connection.fileno()] = handler or NoOpChannelHandler()
+        self._handlers[connection.fileno()] = handler_initializer() or DefaultChannelHandler()
 
         if not is_server:
             channel = NioSocketChannel(self, connection)
@@ -313,7 +314,7 @@ class EventLoop:
                         # print("Total accepted: %s" % self._accepted)
                         if logger.isEnabledFor(logging.DEBUG):
                             logger.debug("Accepted: %s, address: %s, total: %s", sockinfo(connection), address, self._total_accepted)
-                        self._handlers[fileno].channel_read(self._contexts[fileno], connection)
+                        self._handlers[fileno].initialize_child(self._contexts[fileno], connection)
                     continue
 
                 if event & select.POLLOUT:

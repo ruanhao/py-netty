@@ -33,6 +33,7 @@ class ChannelHandlerAdapter(AbstractChannelHandler):
 
 
 NoOpChannelHandler = ChannelHandlerAdapter
+DefaultChannelHandler = ChannelHandlerAdapter
 
 
 class LoggingChannelHandler(AbstractChannelHandler):
