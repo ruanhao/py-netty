@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 @dataclasses.dataclass(kw_only=True)
 class Bootstrap:
     eventloop_group: EventLoopGroup = dataclasses.field(default_factory=EventLoopGroup)
-    handler: typing.Type[AbstractChannelHandler] = dataclasses.field(default_factory=EchoChannelHandler)
+    handler: typing.Type[AbstractChannelHandler] = dataclasses.field(default_factory=NoOpChannelHandler)
 
     def connect(self, address, port) -> ChannelFuture:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

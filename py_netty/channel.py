@@ -18,6 +18,9 @@ class ChannelFuture:
     def channel(self) -> 'AbstractChannel':
         return self.future.result()
 
+    def sync(self) -> 'AbstractChannel':
+        return self.channel()
+
     def is_done(self):
         return self.future.done()
 
@@ -34,7 +37,7 @@ class AbstractChannel:
     def __post_init__(self):
         self._fileno = self._socket.fileno()
 
-    def write(self, buffer):
+    def write(self, buffer) -> Future:
         self._eventloop.write(self._fileno, buffer)
 
     def close_forcibly(self):
