@@ -106,7 +106,7 @@ class EventLoop:
             is_server: bool = False,
             handler: AbstractChannelHandler = None,
             channel_future: ChannelFuture = None
-    ) -> AbstractChannel:
+    ) -> ChannelFuture:
         self.start()            # make sure the loop is started
         if not self.in_event_loop():
             cf = ChannelFuture()
@@ -193,6 +193,10 @@ class EventLoop:
     def _process_write_queue(self):
         while not self._writeq.empty():
             fileno, chunk = self._writeq.get()
+            if self._server_socket.get(fileno):  # close server socket directly
+                self._socks[fileno].close()
+                self._on_sock_close(fileno)
+                continue
             self.add_pending(fileno, chunk)
 
     def _process_task_queue(self):
@@ -202,6 +206,13 @@ class EventLoop:
             task()
             self._total_tasks_processed += 1
 
+    def _on_sock_close(self, fileno):
+        logger.debug(f"on sock closed: {fileno}")
+        context = self._contexts[fileno]
+        context.channel().close_future().set(True)
+        self._handlers[fileno].channel_inactive(context)
+        self.unregister(fileno)
+
     def _process_close_queue(self):
         while not self._closeq.empty():
             fileno, future = self._closeq.get()
@@ -210,8 +221,7 @@ class EventLoop:
             sock.close()
             if future:
                 future.set_result(True)
-            self._handlers[fileno].channel_inactive(self._contexts[fileno])
-            self.unregister(fileno)
+            self._on_sock_close(fileno)
 
     def _events_to_str(self, events):
         result = []
@@ -331,13 +341,11 @@ class EventLoop:
                         self._handlers[fileno].channel_read(self._contexts[fileno], buffer)
                         # logger.info("receive: %s bytes: %s", len(buffer), buffer.decode('utf-8').replace('\n', '\\n'))
                     else:       # EOF
-                        self._handlers[fileno].channel_inactive(self._contexts[fileno])
-                        self.unregister(fileno)
+                        self._on_sock_close(fileno)
                         continue
                 if event & select.POLLHUP:
                     if not event & select.POLLIN:
-                        self._handlers[fileno].channel_inactive(self._contexts[fileno])
-                        self.unregister(fileno)
+                        self._on_sock_close(fileno)
 
     def start(self):
         if self._start_barrier.is_set():

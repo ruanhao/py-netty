@@ -8,27 +8,6 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class ChannelFuture:
-
-    future: Future = None
-
-    def __post_init__(self):
-        self.future = self.future or Future()
-
-    def channel(self) -> 'AbstractChannel':
-        return self.future.result()
-
-    def sync(self) -> 'AbstractChannel':
-        return self.channel()
-
-    def is_done(self):
-        return self.future.done()
-
-    def set(self, channel: 'AbstractChannel'):
-        self.future.set_result(channel)
-
-
-@dataclass
 class AbstractChannel:
 
     _eventloop: 'EventLoop'
@@ -36,9 +15,19 @@ class AbstractChannel:
 
     def __post_init__(self):
         self._fileno = self._socket.fileno()
+        self._close_future = ChannelFuture()
+
+    def close_future(self) -> 'ChannelFuture':
+        return self._close_future
 
     def write(self, buffer) -> Future:
         self._eventloop.write(self._fileno, buffer)
+
+    def close(self, force=False):
+        if force:
+            self.close_forcibly()
+        else:
+            self.close_on_complete()
 
     def close_forcibly(self):
         logger.debug(f"Closing channel FORCIBLY: {self}")
@@ -78,3 +67,28 @@ class ChannelContext:
 
     def channel(self):
         return self._channel
+
+
+@dataclass
+class ChannelFuture:
+
+    future: Future = None
+
+    def __post_init__(self):
+        self.future = self.future or Future()
+
+    def channel(self) -> AbstractChannel:
+        return self.future.result()
+
+    def close_future(self) -> 'ChannelFuture':
+        return self.channel().close_future()
+
+    def sync(self) -> 'ChannelFuture':
+        self.future.result()
+        return self
+
+    def is_done(self) -> bool:
+        return self.future.done()
+
+    def set(self, channel: AbstractChannel) -> None:
+        self.future.set_result(channel)
