@@ -7,13 +7,13 @@ import threading
 from .bytebuf import Chunk
 from .eventfd import eventfd
 from concurrent.futures import Future, ThreadPoolExecutor
-from .utils import create_thread_pool, sockinfo, sendall, recvall, acceptall, log
+from .utils import create_thread_pool, sockinfo, sendall, recvall, acceptall, log, LoggerAdapter
 from .channel import AbstractChannel, NioSocketChannel, NioServerSocketChannel, ChannelFuture, ChannelContext
 from .handler import AbstractChannelHandler, NoOpChannelHandler
 from dataclasses import dataclass
 
 
-logger = logging.getLogger(__name__)
+logger = LoggerAdapter(logging.getLogger(__name__))
 
 
 class EventLoop:
@@ -232,26 +232,26 @@ class EventLoop:
             result.append(f"{fdname}:{flags_str}")
         return ", ".join(result)
 
-    def _show_debug_info(self):
-        logger.debug("=" * 25 + threading.current_thread().name + "=" * 25)
-        logger.debug("[DEBUG INFO] Connections: %s", self._socks)
-        logger.debug("[DEBUG INFO] ServerSockets: %s", self._server_socket)
-        logger.debug("[DEBUG INFO] Handlers: %s", self._handlers)
+    def _show_debug_info(self, n=25):
+        logger.debug(f'{"=" * n} {threading.current_thread().name} {"=" * n}')
 
-        logger.debug("[DEBUG INFO] Total conns: %s", len(self._socks))
-        logger.debug("[DEBUG INFO] Flags: %s", self._flags)
-        logger.debug("[DEBUG INFO] Pendings: %s", self._pendings)
-        logger.debug("[DEBUG INFO] Total sent: %s", self._total_sent)
-        logger.debug("[DEBUG INFO] Total received: %s", self._total_received)
-        logger.debug("[DEBUG INFO] Total registered: %s", self._total_registered)
-        logger.debug("[DEBUG INFO] Total accepted: %s", self._total_accepted)
-        # logger.debug("[DEBUG INFO] Contexts: %s", self._contexts)
-        logger.debug("[DEBUG INFO] WriteQ: %s", self._writeq.qsize())
-        logger.debug("[DEBUG INFO] TaskQ: %s", self._taskq.qsize())
-        logger.debug("[DEBUG INFO] CloseQ: %s", self._closeq.qsize())
+        logger.debug("[INTERNALS] Connections: %s", self._socks)
+        logger.debug("[INTERNALS] ServerSockets: %s", self._server_socket)
+        logger.debug("[INTERNALS] Handlers: %s", self._handlers)
+        logger.debug("[INTERNALS] Contexts: %s", self._contexts)
+        logger.debug("[INTERNALS] Flags: %s", self._flags)
+        logger.debug("[INTERNALS] Pendings: %s", self._pendings)
 
-        logger.debug("[DEBUG INFO] Total tasks submitted: %s", self._total_tasks_submitted)
-        logger.debug("[DEBUG INFO] Total tasks processed: %s", self._total_tasks_processed)
+        logger.debug("[Counter] WriteQ: %s", self._writeq.qsize())
+        logger.debug("[Counter] TaskQ: %s", self._taskq.qsize())
+        logger.debug("[Counter] CloseQ: %s", self._closeq.qsize())
+        logger.debug("[Counter] Total sent: %s", self._total_sent)
+        logger.debug("[Counter] Total received: %s", self._total_received)
+        logger.debug("[Counter] Total registered: %s", self._total_registered)
+        logger.debug("[Counter] Total accepted: %s", self._total_accepted)
+        logger.debug("[Counter] Total tasks submitted: %s", self._total_tasks_submitted)
+        logger.debug("[Counter] Total tasks processed: %s", self._total_tasks_processed)
+        logger.debug("[Counter] Total current conns: %s", len(self._socks))
 
     @log(logger)
     def _start(self):

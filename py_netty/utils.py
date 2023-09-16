@@ -101,8 +101,20 @@ def log(logger: logging.Logger = None, console: bool = True):
                 return func(*args, **kw)
             except Exception as e:
                 if logger:
-                    logger.exception('[py-netty] unhandled exception: %s', str(e))
+                    logger.exception('unhandled exception: %s', str(e))
                 if console:
                     print(traceback.format_exc(), file=sys.stderr)
         return wrapper
     return decorate
+
+
+class LoggerAdapter(logging.LoggerAdapter):
+    def __init__(self, logger, prefix='py-netty'):
+        super(LoggerAdapter, self).__init__(logger, {})
+        self.prefix = prefix
+
+    def process(self, msg, kwargs):
+        if self.prefix:
+            return '[%s] %s' % (self.prefix, msg), kwargs
+        else:
+            return msg, kwargs

@@ -1,8 +1,9 @@
 import abc
 import logging
+from .utils import LoggerAdapter
 
 
-logger = logging.getLogger(__name__)
+logger = LoggerAdapter(logging.getLogger(__name__))
 
 
 class AbstractChannelHandler(abc.ABC):
@@ -33,7 +34,7 @@ class NoOpChannelHandler(AbstractChannelHandler):
 
 class LoggingChannelHandler(AbstractChannelHandler):
     def channel_active(self, ctx: 'ChannelContext'):
-        logger.debug(f"[CHannel Active] {ctx.channel()}")
+        logger.debug(f"[Channel Active] {ctx.channel()}")
         pass
 
     def channel_read(self, ctx, buffer):
