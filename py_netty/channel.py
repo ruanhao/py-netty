@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from concurrent.futures import Future
 import socket
 import logging
-from . import utils
+from .utils import sockinfo
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ class AbstractChannel:
         return self._eventloop.close_on_complete(self._fileno)
 
     def __str__(self):
-        return utils.sockinfo(self._socket)
+        return sockinfo(self._socket)
 
 
 class NioSocketChannel(AbstractChannel):

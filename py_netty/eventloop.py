@@ -85,6 +85,7 @@ class EventLoop:
         logger.debug(f"Unregistering {sockinfo(sock)}")
         try:
             self._epoll.unregister(fileno)
+            logger.debug(f"Unregistered fd({fileno}) from epoll")
         except Exception:
             pass
         self._socks[fileno].close()
@@ -113,6 +114,9 @@ class EventLoop:
             return cf
         connection.setblocking(0)
         flag = select.POLLIN | select.POLLHUP
+        # not sure if this is a bug, but on linux, if I register a server socket with EPOLLET,
+        # when there is a flood of connections, epoll will not trigger POLLIN event for the server socket to accept,
+        # even if there are connections waiting to be accepted.
         # if self._linux and not is_server:
         #     flag |= select.EPOLLET
         self._flags[connection.fileno()] = flag
@@ -218,7 +222,8 @@ class EventLoop:
             elif self._server_socket.get(fileno, False):
                 fdname = f"server({fileno})"
             elif fileno in self._socks:
-                fdname = sockinfo(self._socks[fileno])
+                # fdname = sockinfo(self._socks[fileno])
+                fdname = f"client({fileno})"
             else:
                 fdname = "unknown"
 
