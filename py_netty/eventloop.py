@@ -61,7 +61,11 @@ class EventLoop:
             logger.debug(f"Interrupting eventloop (EventFD:{hex(id(self._eventfd))}) in {self._thread.name}: {desc}")
         self._eventfd.unsafe_write()
 
-    def unregister(self, channel: AbstractChannel):
+    def unregister(self, channel: AbstractChannel, channel_future: ChannelFuture = None):
+        cf = channel_future or ChannelFuture()
+        if not self.in_eventloop():
+            self.submit_task(lambda: self.unregister(channel, cf))
+            return cf
         fileno = channel.fileno0()
         try:
             self._epoll.unregister(fileno)
@@ -69,6 +73,8 @@ class EventLoop:
         except Exception:
             pass
         self._channels.pop(fileno, None)
+        cf.set(channel)
+        return cf
 
     def in_eventloop(self):
         return self._thread == threading.current_thread()
@@ -126,17 +132,18 @@ class EventLoop:
     def _events_to_str(self, events):
         result = []
         for fileno, flag in events:
-            channel = self._channels.get(fileno)
-            if not channel:
-                continue
-            flags = []
             if fileno == self._eventfd.fileno():
                 fdname = f"EventFD({hex(id(self._eventfd))})"
-            elif channel.is_server():
-                fdname = f"server({fileno})"
             else:
-                fdname = f"client({fileno})"
+                channel = self._channels.get(fileno)
+                if not channel:
+                    fdname = f"unknown({fileno})"
+                elif channel.is_server():
+                    fdname = f"server({fileno})"
+                else:
+                    fdname = f"client({fileno})"
 
+            flags = []
             if flag & select.POLLIN:
                 flags.append("POLLIN")
             if flag & select.POLLOUT:
@@ -178,6 +185,7 @@ class EventLoop:
 
             if not events and logger.isEnabledFor(logging.DEBUG):
                 self._show_debug_info()
+                pass
             if events:
                 logger.debug("Events: %s", self._events_to_str(events))
 

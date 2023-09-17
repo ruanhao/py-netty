@@ -40,7 +40,7 @@ class AbstractChannel:
     def register(self) -> 'ChannelFuture':
         return self._eventloop.register(self)
 
-    def unregister(self) -> None:
+    def unregister(self) -> 'ChannelFuture':
         return self._eventloop.unregister(self)
 
     def flag(self):
@@ -107,14 +107,14 @@ class AbstractChannel:
             self._eventloop.submit_task(self.close_gracefully)
             return self.close_future()
 
-        logger.debug(f"Closing channel GRACEFULLY: {self}")
-        if self.is_active():
+        logger.debug(f"Closing channel (active:{self.is_active()}) GRACEFULLY: {self}")
+        if not self.is_active():
             return self.close_future()
 
         if self.is_server():
             self._eventloop._close_channel_internally(self, 'close server channel gracefully')
         else:                  # client channel
-            self.add_pennding(Chunk(EMPTY_BUFFER, self.close_future().future, True))
+            self.add_pending(Chunk(EMPTY_BUFFER, self.close_future().future, True))
         return self.close_future()
 
     def in_eventloop(self):
