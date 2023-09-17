@@ -2,7 +2,7 @@ import typing
 import socket
 import dataclasses
 from .eventloop import EventLoopGroup
-from .channel import ChannelFuture, ChannelContext
+from .channel import ChannelFuture, ChannelContext, NioSocketChannel, NioServerSocketChannel
 from .handler import EchoChannelHandler, ChannelHandlerAdapter
 import logging
 
@@ -41,11 +41,15 @@ class ServerBootstrap:
         server_socket.setblocking(0)
         eventloop = self.parant_group.get_eventloop()
 
-        class _ServerChannelHandlerInitializer(ChannelHandlerAdapter):
+        class _ChannelInitializer(ChannelHandlerAdapter):
             def initialize_child(this, ctx: ChannelContext, client_socket: socket.socket):
                 logger.debug("Initializing client socket: %s", client_socket)
                 client_socket.setblocking(0)
-                child_eventloop = self.child_group.get_eventloop()
-                child_eventloop.register(client_socket, is_server=False, handler_initializer=self.child_handler_initializer)
+                NioSocketChannel(
+                    self.child_group.get_eventloop(),
+                    client_socket,
+                    handler_initializer=self.child_handler_initializer
+                ).register()
 
-        return eventloop.register(server_socket, is_server=True, handler_initializer=_ServerChannelHandlerInitializer)
+        return NioServerSocketChannel(eventloop, server_socket, handler_initializer=_ChannelInitializer).register()
+        # return eventloop.register(server_socket, is_server=True, handler_initializer=_ChannelInitializer)

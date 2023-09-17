@@ -9,7 +9,7 @@ from .bytebuf import Chunk
 from .eventfd import eventfd
 from concurrent.futures import Future, ThreadPoolExecutor
 from .utils import create_thread_pool, sockinfo, sendall, recvall, acceptall, log, LoggerAdapter
-from .channel import NioSocketChannel, NioServerSocketChannel, ChannelFuture, ChannelContext
+from .channel import NioSocketChannel, NioServerSocketChannel, ChannelFuture, ChannelContext, AbstractChannel
 from .handler import DefaultChannelHandler
 from dataclasses import dataclass
 
@@ -30,17 +30,8 @@ class EventLoop:
 
         # poll object
         self._eventfd = eventfd()
-        logger.debug(f"Event FD: {hex(id(self._eventfd))}")
         self._epoll = self._get_poll_obj()
         self._epoll.register(self._eventfd, select.POLLIN)
-
-        # internals
-        self._flags = {}          # {fileno: flag}
-        self._socks = {}          # {fileno: socket}
-        self._pendings = {}       # {'file_no': [Chunk, Chunk, ...]}
-        self._handlers = {}       # {fileno: handler}
-        self._server_socket = {}  # {fileno: is_server_listening_socket}
-        self._contexts = {}       # {fileno: ChannelContext}
 
         # queues
         self._writeq = queue.Queue()
@@ -54,6 +45,9 @@ class EventLoop:
         self._total_registered = 0
         self._total_tasks_submitted = 0
         self._total_tasks_processed = 0
+
+        # internals
+        self._channels = {}  # {fileno: Channel}
 
     def _get_poll_obj(self):
         try:
@@ -84,62 +78,41 @@ class EventLoop:
             logger.debug(f"Interrupting event loop({hex(id(self))}) (EventFD:{hex(id(self._eventfd))}): {desc}")
         self._eventfd.unsafe_write()
 
-    def unregister(self, fileno):
-        sock = self._socks[fileno]
-        logger.debug(f"Unregistering {sockinfo(sock)}")
+    def unregister(self, channel: AbstractChannel):
+        fileno = channel.fileno0()
+        logger.debug(f"Unregistering {fileno}")
         try:
             self._epoll.unregister(fileno)
             logger.debug(f"Unregistered fd({fileno}) from epoll")
         except Exception:
             pass
-        self._socks[fileno].close()
+        self._channels.pop(fileno, None)
 
-        self._socks.pop(fileno, None)
-        self._flags.pop(fileno, None)
-        self._server_socket.pop(fileno, None)
-        self._handlers.pop(fileno, None)
-        self._contexts.pop(fileno, None)
-        self._pendings.pop(fileno, None)
-
-    def in_event_loop(self):
+    def in_eventloop(self):
         return self._thread == threading.current_thread()
 
-    def register(
-            self,
-            connection: socket.socket,
-            is_server: bool = False,
-            handler_initializer: Callable = None,  # channel_initializer() -> ChannelHandler
-            channel_future: ChannelFuture = None
-    ) -> ChannelFuture:
-        self.start()            # make sure the loop is started
-        if not self.in_event_loop():
+    def register(self, channel: AbstractChannel, channel_future: ChannelFuture = None) -> ChannelFuture:
+        self.start()
+
+        if not self.in_eventloop():
             cf = ChannelFuture()
-            self.submit_task(lambda: self.register(connection, is_server, handler_initializer, cf))
+            self.submit_task(lambda: self.register(channel, cf))
             return cf
-        connection.setblocking(0)
+
+        sock = channel.socket()
+        sock.setblocking(0)
+
         flag = select.POLLIN | select.POLLHUP
         # not sure if this is a bug, but on linux, if I register a server socket with EPOLLET,
         # when there is a flood of connections, epoll will not trigger POLLIN event for the server socket to accept,
         # even if there are connections waiting to be accepted.
         # if self._linux and not is_server:
         #     flag |= select.EPOLLET
-        self._flags[connection.fileno()] = flag
-        self._epoll.register(connection.fileno(), flag)
+        channel.set_flag(flag)
+        self._epoll.register(channel, flag)
         self._total_registered += 1
-        logger.debug(f"Registered {sockinfo(connection)}, flag: {flag}")
-        self._socks[connection.fileno()] = connection
-        self._server_socket[connection.fileno()] = is_server
-        self._handlers[connection.fileno()] = handler_initializer() or DefaultChannelHandler()
-
-        if not is_server:
-            channel = NioSocketChannel(self, connection)
-            connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        else:
-            channel = NioServerSocketChannel(self, connection)
-
-        context = ChannelContext(channel)
-        self._contexts[connection.fileno()] = context
-        self._handlers[connection.fileno()].channel_active(context)
+        self._channels[channel.fileno()] = channel
+        logger.debug(f"Registered {sockinfo(sock)} with flag: {flag}")
         cf = channel_future or ChannelFuture()
         cf.set(channel)
         return cf
@@ -148,55 +121,6 @@ class EventLoop:
         logger.debug("stopping epoll")
         self._stop_polling = True
         self.interrupt('stop epoll')
-
-    def add_flag(self, fileno, flag):
-        if fileno not in self._flags:  # eg. sock receives EOF from peer and after a while invoke close() locally
-            # logger.debug(f"fd({fileno}) not in flags")
-            return
-        if self._flags[fileno] & flag:
-            return
-        self._flags[fileno] |= flag
-        self._epoll.modify(fileno, self._flags[fileno])
-
-    def remove_flag(self, fileno, flag):
-        if fileno not in self._flags or not self._flags[fileno] & flag:
-            return
-        self._flags[fileno] &= ~flag
-        self._epoll.modify(fileno, self._flags[fileno])
-
-    def add_pending(self, fileno, chunk: Chunk):
-        if not chunk.close and not chunk.buffer:
-            chunk.future.set_result(True)
-            return
-        if fileno not in self._pendings:
-            if fileno in self._socks:  # ensure the socket is still alive
-                self._pendings[fileno] = [chunk]
-        else:
-            self._pendings[fileno].append(chunk)
-        self.add_flag(fileno, select.POLLOUT)
-
-    def write(self, fileno, buffer) -> Future:
-        if not self.in_event_loop():
-            assert self._thread is not None, "EventLoop not started yet"
-            chunk = Chunk(buffer)
-            self._writeq.put((fileno, chunk))
-            self.interrupt('write buffer')
-            return chunk.future
-
-        if not buffer:
-            f = Future()
-            f.set_result(True)
-            return f
-
-        if self._pendings.get(fileno):  # already has pending
-            chunk = Chunk(buffer)
-        else:
-            pending = sendall(self._socks[fileno], buffer)
-            self._total_sent += (len(buffer) - len(pending))
-            chunk = Chunk(pending)
-
-        self.add_pending(fileno, chunk)
-        return chunk.future
 
     def _process_write_queue(self):
         while not self._writeq.empty():
@@ -214,12 +138,13 @@ class EventLoop:
             task()
             self._total_tasks_processed += 1
 
-    def _on_sock_close(self, fileno):
-        logger.debug(f"on sock closed: {fileno}")
-        context = self._contexts[fileno]
-        context.channel().close_future().set(True)
-        self._handlers[fileno].channel_inactive(context)
-        self.unregister(fileno)
+    def _close_channel_internally(self, channel, reason=''):
+        assert self.in_eventloop(), "Must be in event loop"
+        logger.debug(f"closing channel(active:{channel.is_active()}) internally: {channel.fileno0()}, reason: {reason}")
+        channel.socket().close()
+        channel.close_future().set(True)
+        channel.set_active(False)
+        channel.unregister()
 
     def _process_close_queue(self):
         while not self._closeq.empty():
@@ -234,16 +159,16 @@ class EventLoop:
     def _events_to_str(self, events):
         result = []
         for fileno, flag in events:
+            channel = self._channels.get(fileno)
+            if not channel:
+                continue
             flags = []
             if fileno == self._eventfd.fileno():
                 fdname = f"EventFD({hex(id(self._eventfd))})"
-            elif self._server_socket.get(fileno, False):
+            elif channel.is_server():
                 fdname = f"server({fileno})"
-            elif fileno in self._socks:
-                # fdname = sockinfo(self._socks[fileno])
-                fdname = f"client({fileno})"
             else:
-                fdname = "unknown"
+                fdname = f"client({fileno})"
 
             if flag & select.POLLIN:
                 flags.append("POLLIN")
@@ -258,13 +183,6 @@ class EventLoop:
     def _show_debug_info(self, n=25):
         logger.debug(f'{"=" * n} {threading.current_thread().name} {"=" * n}')
 
-        logger.debug("[INTERNALS] Connections: %s", self._socks)
-        logger.debug("[INTERNALS] ServerSockets: %s", self._server_socket)
-        logger.debug("[INTERNALS] Handlers: %s", self._handlers)
-        logger.debug("[INTERNALS] Contexts: %s", self._contexts)
-        logger.debug("[INTERNALS] Flags: %s", self._flags)
-        logger.debug("[INTERNALS] Pendings: %s", self._pendings)
-
         logger.debug("[Counter] WriteQ: %s", self._writeq.qsize())
         logger.debug("[Counter] TaskQ: %s", self._taskq.qsize())
         logger.debug("[Counter] CloseQ: %s", self._closeq.qsize())
@@ -274,13 +192,13 @@ class EventLoop:
         logger.debug("[Counter] Total accepted: %s", self._total_accepted)
         logger.debug("[Counter] Total tasks submitted: %s", self._total_tasks_submitted)
         logger.debug("[Counter] Total tasks processed: %s", self._total_tasks_processed)
-        logger.debug("[Counter] Total current conns: %s", len(self._socks))
+        logger.debug("[Counter] Total current conns: %s", len(self._channels))
 
     @log(logger)
     def _start(self):
         self._thread = threading.current_thread()
         self._start_barrier.set()
-        logger.debug(f"EventLoop({id(self)}) started")
+        logger.debug(f"EventLoop {hex(id(self))} started")
         while True:
             if self._stop_polling:
                 self._epoll.close()
@@ -303,33 +221,39 @@ class EventLoop:
 
             for fileno, event in events:
                 if fileno == self._eventfd.fileno():  # just to wake up from epoll
-                    # logger.debug("Interrupted")
+                    logger.debug("Interrupted")
                     self._eventfd.unsafe_read()
                     continue
 
-                if self._server_socket.get(fileno):
-                    for connection, address in acceptall(self._socks[fileno]):
+                channel = self._channels.get(fileno)
+                if not channel:
+                    logger.error("Channel not found: %s", fileno)
+                    continue
+
+                if channel.is_server():
+                    server_channel = channel
+                    if not server_channel.is_active():
+                        server_channel.set_active(True)
+                        server_channel.handler().channel_active(server_channel.context())
+                    for client_sock, client_addr in server_channel.acceptall():
                         self._total_accepted += 1
-                        # print("Total accepted: %s" % self._accepted)
-                        if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug("Accepted: %s, address: %s, total: %s", sockinfo(connection), address, self._total_accepted)
-                        self._handlers[fileno].initialize_child(self._contexts[fileno], connection)
+                        logger.debug("Accepted: %s, address: %s, total: %s", sockinfo(client_sock), client_addr, self._total_accepted)
+                        server_channel.handler().initialize_child(server_channel.context(), client_sock)
                     continue
 
                 if event & select.POLLOUT:
-                    chunks = self._pendings.get(fileno, [])
-                    if not chunks:  # no pending chunks
-                        self.remove_flag(fileno, select.POLLOUT)
+                    if not channel.has_pendings():  # no pending chunks
+                        channel.remove_flag(select.POLLOUT)
                         continue
-
+                    chunks = channel.pendings()
                     while True:
                         head, *tail = chunks
                         if head.close:  # denote to close locally
-                            logger.debug("Close ON_COMPLETE: %s", sockinfo(self._socks[fileno]))
-                            self.close_forcibly(fileno, head.future, 'chunk with close flag')
+                            logger.debug("Hit Chunk with close indicator: %s", sockinfo(channel.socket()))
+                            self._close_channel_internally(channel, 'hit chunk with close indicator')
                             break
                         l0 = len(head.buffer)
-                        head.buffer = sendall(self._socks[fileno], head.buffer)
+                        head.buffer = channel.try_send(head.buffer)
                         self._total_sent += (l0 - len(head.buffer))
                         if not head.buffer:  # all data sent for this chunk
                             chunks = tail
@@ -338,23 +262,23 @@ class EventLoop:
                                 break
                         else:   # still has data to send later for this chunk
                             break
-                    self._pendings[fileno] = chunks
-                    if not chunks:
-                        self.remove_flag(fileno, select.POLLOUT)
+                    channel.set_pendings(chunks)
+                    if not channel.has_pendings():
+                        channel.remove_flag(select.POLLOUT)
 
-                if event & select.POLLIN and fileno in self._socks:
-                    buffer = recvall(self._socks[fileno])
+                if event & select.POLLIN and fileno in self._channels:
+                    buffer = channel.recvall()
                     self._total_received += len(buffer)
                     if buffer:
-                        self._handlers[fileno].channel_read(self._contexts[fileno], buffer)
-                        # logger.info("receive: %s bytes: %s", len(buffer), buffer.decode('utf-8').replace('\n', '\\n'))
+                        logger.info("receive: %s bytes: %s", len(buffer), buffer.decode('utf-8').replace('\n', '\\n'))
+                        channel.handler().channel_read(channel.context(), buffer)
                     else:       # EOF
-                        logger.debug("EOF: %s", sockinfo(self._socks[fileno]))
-                        self._on_sock_close(fileno)
+                        self._close_channel_internally(channel, 'EOF')
                         continue
+
                 if event & select.POLLHUP:
                     if not event & select.POLLIN:
-                        self._on_sock_close(fileno)
+                        self._close_channel_internally(channel, 'HUP')
 
             self._process_task_queue()
 
