@@ -1,16 +1,12 @@
 import queue
-from typing import Callable
 import itertools
 import select
-import socket
 import logging
 import threading
-from .bytebuf import Chunk
 from .eventfd import eventfd
-from concurrent.futures import Future, ThreadPoolExecutor
-from .utils import create_thread_pool, sockinfo, sendall, recvall, acceptall, log, LoggerAdapter
-from .channel import NioSocketChannel, NioServerSocketChannel, ChannelFuture, ChannelContext, AbstractChannel
-from .handler import DefaultChannelHandler
+from concurrent.futures import ThreadPoolExecutor
+from .utils import create_thread_pool, sockinfo, log, LoggerAdapter
+from .channel import ChannelFuture, AbstractChannel
 from dataclasses import dataclass
 
 
@@ -22,6 +18,8 @@ class EventLoop:
     def __init__(self, pool: ThreadPoolExecutor):
         assert pool, "thread pool executor is required"
 
+        # internals
+        self._channels = {}  # {fileno: Channel}
         self._thread = None
         self._stop_polling = False
         self._start_barrier = threading.Event()
@@ -34,8 +32,6 @@ class EventLoop:
         self._epoll.register(self._eventfd, select.POLLIN)
 
         # queues
-        self._writeq = queue.Queue()
-        self._closeq = queue.Queue()  # locally closed
         self._taskq = queue.Queue()
 
         # counters
@@ -45,9 +41,6 @@ class EventLoop:
         self._total_registered = 0
         self._total_tasks_submitted = 0
         self._total_tasks_processed = 0
-
-        # internals
-        self._channels = {}  # {fileno: Channel}
 
     def _get_poll_obj(self):
         try:
@@ -61,26 +54,15 @@ class EventLoop:
         self.start()
         self._taskq.put(task)
         self._total_tasks_submitted += 1
-        self.interrupt()
-
-    def close_on_complete(self, fileno) -> Future:
-        c = Chunk(b'', close=True)
-        self._writeq.put((fileno, c))
-        self.interrupt('close gracefully')
-        return c.future
-
-    def close_forcibly(self, fileno, future: Future = None, reason: str = None):
-        self._closeq.put((fileno, future))
-        self.interrupt(reason or 'close forcibly')
+        self.interrupt("submit task")
 
     def interrupt(self, desc=""):
         if desc:
-            logger.debug(f"Interrupting event loop({hex(id(self))}) (EventFD:{hex(id(self._eventfd))}): {desc}")
+            logger.debug(f"Interrupting eventloop (EventFD:{hex(id(self._eventfd))}) in {self._thread.name}: {desc}")
         self._eventfd.unsafe_write()
 
     def unregister(self, channel: AbstractChannel):
         fileno = channel.fileno0()
-        logger.debug(f"Unregistering {fileno}")
         try:
             self._epoll.unregister(fileno)
             logger.debug(f"Unregistered fd({fileno}) from epoll")
@@ -102,7 +84,7 @@ class EventLoop:
         sock = channel.socket()
         sock.setblocking(0)
 
-        flag = select.POLLIN | select.POLLHUP
+        flag = select.POLLIN | select.POLLHUP | select.POLLOUT
         # not sure if this is a bug, but on linux, if I register a server socket with EPOLLET,
         # when there is a flood of connections, epoll will not trigger POLLIN event for the server socket to accept,
         # even if there are connections waiting to be accepted.
@@ -122,39 +104,24 @@ class EventLoop:
         self._stop_polling = True
         self.interrupt('stop epoll')
 
-    def _process_write_queue(self):
-        while not self._writeq.empty():
-            fileno, chunk = self._writeq.get()
-            if self._server_socket.get(fileno):  # close server socket directly
-                self._socks[fileno].close()
-                self._on_sock_close(fileno)
-                continue
-            self.add_pending(fileno, chunk)
-
     def _process_task_queue(self):
         while not self._taskq.empty():
             task = self._taskq.get()
             logger.debug(f"Runing task: {task}")
-            task()
+            try:
+                task()
+            except Exception:
+                logger.exception(f"Error running task: {task}")
+            logger.debug(f"Task done: {task}")
             self._total_tasks_processed += 1
 
     def _close_channel_internally(self, channel, reason=''):
         assert self.in_eventloop(), "Must be in event loop"
         logger.debug(f"closing channel(active:{channel.is_active()}) internally: {channel.fileno0()}, reason: {reason}")
         channel.socket().close()
-        channel.close_future().set(True)
+        channel.close_future().set(channel)
         channel.set_active(False)
         channel.unregister()
-
-    def _process_close_queue(self):
-        while not self._closeq.empty():
-            fileno, future = self._closeq.get()
-            sock = self._socks[fileno]
-            logger.debug(f"Closing {sockinfo(sock)}")
-            sock.close()
-            if future:
-                future.set_result(True)
-            self._on_sock_close(fileno)
 
     def _events_to_str(self, events):
         result = []
@@ -183,9 +150,7 @@ class EventLoop:
     def _show_debug_info(self, n=25):
         logger.debug(f'{"=" * n} {threading.current_thread().name} {"=" * n}')
 
-        logger.debug("[Counter] WriteQ: %s", self._writeq.qsize())
         logger.debug("[Counter] TaskQ: %s", self._taskq.qsize())
-        logger.debug("[Counter] CloseQ: %s", self._closeq.qsize())
         logger.debug("[Counter] Total sent: %s", self._total_sent)
         logger.debug("[Counter] Total received: %s", self._total_received)
         logger.debug("[Counter] Total registered: %s", self._total_registered)
@@ -198,7 +163,7 @@ class EventLoop:
     def _start(self):
         self._thread = threading.current_thread()
         self._start_barrier.set()
-        logger.debug(f"EventLoop {hex(id(self))} started")
+        logger.debug(f"EventLoop (EventFD:{hex(id(self._eventfd))}) started in thread: {self._thread.name}")
         while True:
             if self._stop_polling:
                 self._epoll.close()
@@ -215,9 +180,6 @@ class EventLoop:
                 self._show_debug_info()
             if events:
                 logger.debug("Events: %s", self._events_to_str(events))
-
-            self._process_close_queue()
-            self._process_write_queue()
 
             for fileno, event in events:
                 if fileno == self._eventfd.fileno():  # just to wake up from epoll
@@ -243,6 +205,7 @@ class EventLoop:
 
                 if event & select.POLLOUT:
                     if not channel.has_pendings():  # no pending chunks
+                        channel.set_active(True)
                         channel.remove_flag(select.POLLOUT)
                         continue
                     chunks = channel.pendings()
@@ -270,7 +233,7 @@ class EventLoop:
                     buffer = channel.recvall()
                     self._total_received += len(buffer)
                     if buffer:
-                        logger.info("receive: %s bytes: %s", len(buffer), buffer.decode('utf-8').replace('\n', '\\n'))
+                        # logger.info("receive: %s bytes: %s", len(buffer), buffer.decode('utf-8').replace('\n', '\\n'))
                         channel.handler().channel_read(channel.context(), buffer)
                     else:       # EOF
                         self._close_channel_internally(channel, 'EOF')

@@ -6,7 +6,7 @@ import logging
 from .utils import sockinfo
 from .handler import LoggingChannelHandler
 from typing import Callable, List
-from .bytebuf import Chunk
+from .bytebuf import Chunk, EMPTY_BUFFER
 
 
 logger = logging.getLogger(__name__)
@@ -91,16 +91,31 @@ class AbstractChannel:
     def close(self, force=False):
         if force:
             self.close_forcibly()
-        else:
-            self.close_on_complete()
+        else:                   # gracefully
+            self.close_gracefully()
 
-    def close_forcibly(self):
+    def close_forcibly(self) -> 'ChannelFuture':
+        if not self.in_eventloop():
+            self._eventloop.submit_task(self.close_forcibly)
+            return self.close_future()
         logger.debug(f"Closing channel FORCIBLY: {self}")
-        self._eventloop.close_forcibly(self._fileno)
+        self._eventloop._close_channel_internally(self, 'close channel forcibly')
+        return self.close_future()
 
-    def close_on_complete(self):
+    def close_gracefully(self) -> 'ChannelFuture':
+        if not self.in_eventloop():
+            self._eventloop.submit_task(self.close_gracefully)
+            return self.close_future()
+
         logger.debug(f"Closing channel GRACEFULLY: {self}")
-        return self._eventloop.close_on_complete(self._fileno)
+        if self.is_active():
+            return self.close_future()
+
+        if self.is_server():
+            self._eventloop._close_channel_internally(self, 'close server channel gracefully')
+        else:                  # client channel
+            self.add_pennding(Chunk(EMPTY_BUFFER, self.close_future().future, True))
+        return self.close_future()
 
     def in_eventloop(self):
         return self._eventloop.in_eventloop()
@@ -139,24 +154,12 @@ class NioSocketChannel(AbstractChannel):
         if not self.in_eventloop():
             self._eventloop.submit_task(lambda: self.write(buffer, cf))
             return cf
-
-        if not buffer:
-            cf.set(self)
-            return cf
-
-        # chuck = None
-        # if self.has_pendings():  # already has pendings waiting to be sent
-        #     chuck = Chunk(buffer, cf.future)
-        # else: # no pendings, try send directly
-        #     pending = self.try_send(buffer)
-        #     self._eventloop._total_sent += len(buffer) - len(pending)
-        #     if pending:
-        #         chuck = Chunk(pending, cf.future)
-
         self.add_pending(Chunk(buffer, cf.future))
         return cf
 
     def try_send(self, bytebuf: bytes, spin=1) -> bytes:
+        if not bytebuf:
+            return b''
         total_sent = 0
         while total_sent < len(bytebuf):
             try:
@@ -232,4 +235,6 @@ class ChannelFuture:
         return self.future.done()
 
     def set(self, channel: AbstractChannel) -> None:
+        if self.future.done():
+            return
         self.future.set_result(channel)

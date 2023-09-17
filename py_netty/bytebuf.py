@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from concurrent.futures import Future
 
+EMPTY_BUFFER = b''
+
 
 @dataclass
 class Chunk:
