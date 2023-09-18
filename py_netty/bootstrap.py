@@ -21,7 +21,8 @@ class Bootstrap:
 
     def connect(self, address, port) -> ChannelFuture:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect((address, port))  # blocking api
+        sock.setblocking(False)
+        sock.connect_ex((address, port))  # non blocking
         return NioSocketChannel(
             self.eventloop_group.get_eventloop(),
             sock,

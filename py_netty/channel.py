@@ -31,7 +31,7 @@ class AbstractChannel:
         self.__str__()          # load sockinfo
 
     def id(self):
-        return str(hex(id(self)))
+        return str(hex(id(self.socket())))
 
     def context(self) -> 'ChannelContext':
         return ChannelContext(self)
@@ -56,14 +56,20 @@ class AbstractChannel:
             return
         self._flag |= flag
         logger.debug("add flag %s to channel %s, current flag: %s", flag, self.id(), self._flag)
-        self._eventloop._epoll.modify(self._fileno, self._flag)
+        try:
+            self._eventloop._epoll.modify(self._fileno, self._flag)
+        except Exception:       # maybe fileno is closed
+            logger.exception("add flag %s to channel %s failed", flag, self.id())
 
     def remove_flag(self, flag):
         if not self._flag & flag:
             return
         self._flag &= ~flag
         logger.debug("remove flag %s from channel %s, current flag: %s", flag, self.id(), self._flag)
-        self._eventloop._epoll.modify(self._fileno, self._flag)
+        try:
+            self._eventloop._epoll.modify(self._fileno, self._flag)
+        except Exception:       # maybe fileno is closed
+            logger.exception("remove flag %s from channel %s failed", flag, self.id())
 
     def handler(self):
         if self._handler is None:
@@ -90,9 +96,10 @@ class AbstractChannel:
         return self._active
 
     @log(logger)
-    def set_active(self, active):
+    def set_active(self, active, reason=''):
         origin = self._active
-        logger.debug("set channel %s active status: %s", self.id(), active)
+        if origin != active:
+            logger.debug("set channel %s active status: %s, reason: %s", self.id(), active, reason)
         self._active = active
         if origin is True and active is False:
             self.handler().channel_inactive(self.context())
@@ -144,10 +151,14 @@ class AbstractChannel:
 
 class NioSocketChannel(AbstractChannel):
 
-    def __init__(self, eventloop: 'EventLoop', sock: socket.socket, handler_initializer: Callable):
+    def __init__(self, eventloop: 'EventLoop', sock: socket.socket, handler_initializer: Callable, connect_timeout_millis: int = 3000):
         super().__init__(eventloop, sock, handler_initializer)
         self._pendings = []     # [Chunk, ...]
         self.socket().setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self._connect_timeout_millis = connect_timeout_millis
+
+    def connect_timeout_millis(self) -> int:
+        return self._connect_timeout_millis
 
     def pendings(self) -> List['Chunk']:
         return self._pendings
