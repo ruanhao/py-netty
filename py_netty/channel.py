@@ -3,7 +3,7 @@ from concurrent.futures import Future
 import socket
 import select
 import logging
-from .utils import sockinfo
+from .utils import sockinfo, log
 from .handler import LoggingChannelHandler
 from typing import Callable, List
 from .bytebuf import Chunk, EMPTY_BUFFER
@@ -27,6 +27,11 @@ class AbstractChannel:
         self._handler = None    # lazy initialization
         self._flag = 0          # intrested events
         self._server_channel = False
+        self._ever_active = False
+        self.__str__()          # load sockinfo
+
+    def id(self):
+        return str(hex(id(self)))
 
     def context(self) -> 'ChannelContext':
         return ChannelContext(self)
@@ -50,12 +55,14 @@ class AbstractChannel:
         if self._flag & flag:
             return
         self._flag |= flag
+        logger.debug("add flag %s to channel %s, current flag: %s", flag, self.id(), self._flag)
         self._eventloop._epoll.modify(self._fileno, self._flag)
 
     def remove_flag(self, flag):
         if not self._flag & flag:
             return
         self._flag &= ~flag
+        logger.debug("remove flag %s from channel %s, current flag: %s", flag, self.id(), self._flag)
         self._eventloop._epoll.modify(self._fileno, self._flag)
 
     def handler(self):
@@ -78,14 +85,19 @@ class AbstractChannel:
         return self._close_future
 
     def is_active(self):
+        if self.close_future().done():
+            return False
         return self._active
 
+    @log(logger)
     def set_active(self, active):
         origin = self._active
+        logger.debug("set channel %s active status: %s", self.id(), active)
         self._active = active
         if origin is True and active is False:
             self.handler().channel_inactive(self.context())
         if origin is False and active is True:
+            self._ever_active = True
             self.handler().channel_active(self.context())
 
     def close(self, force=False):
@@ -121,7 +133,13 @@ class AbstractChannel:
         return self._eventloop.in_eventloop()
 
     def __str__(self):
-        return sockinfo(self._socket)
+        if not hasattr(self, '_sockinfo'):
+            self._sockinfo = sockinfo(self._socket)
+        if not self._ever_active:
+            return self._sockinfo.replace('-', '?')
+        if not self.is_active():
+            return self._sockinfo.replace('-', '!')
+        return self._sockinfo
 
 
 class NioSocketChannel(AbstractChannel):
@@ -231,10 +249,13 @@ class ChannelFuture:
         self.future.result()
         return self
 
-    def is_done(self) -> bool:
+    def done(self) -> bool:
         return self.future.done()
 
     def set(self, channel: AbstractChannel) -> None:
         if self.future.done():
             return
         self.future.set_result(channel)
+
+    def add_listener(self, listener: Callable) -> None:
+        self.future.add_done_callback(lambda f: listener(self))

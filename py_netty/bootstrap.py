@@ -45,7 +45,7 @@ class ServerBootstrap:
         eventloop = self.parant_group.get_eventloop()
 
         class _ChannelInitializer(ChannelHandlerAdapter):
-            def initialize_child(this, ctx: ChannelContext, client_socket: socket.socket):
+            def channel_read(this, ctx: ChannelContext, client_socket: socket.socket):
                 logger.debug("Initializing client socket: %s", client_socket)
                 client_socket.setblocking(0)
                 NioSocketChannel(

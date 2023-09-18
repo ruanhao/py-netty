@@ -1,4 +1,5 @@
 import queue
+import time
 import itertools
 import select
 import logging
@@ -8,9 +9,12 @@ from concurrent.futures import ThreadPoolExecutor
 from .utils import create_thread_pool, sockinfo, log, LoggerAdapter
 from .channel import ChannelFuture, AbstractChannel
 from dataclasses import dataclass
+from typing import List, Tuple
 
 
 logger = LoggerAdapter(logging.getLogger(__name__))
+
+DEBUG_INTERVAL_SECONDS = 10
 
 
 class EventLoop:
@@ -58,7 +62,7 @@ class EventLoop:
 
     def interrupt(self, desc=""):
         if desc:
-            logger.debug(f"Interrupting eventloop (EventFD:{hex(id(self._eventfd))}) in {self._thread.name}: {desc}")
+            logger.debug(f"interrupting eventloop with EventFD {hex(id(self._eventfd))} in {self._thread.name}: {desc}")
         self._eventfd.unsafe_write()
 
     def unregister(self, channel: AbstractChannel, channel_future: ChannelFuture = None):
@@ -69,7 +73,7 @@ class EventLoop:
         fileno = channel.fileno0()
         try:
             self._epoll.unregister(fileno)
-            logger.debug(f"Unregistered fd({fileno}) from epoll")
+            logger.debug("unregistered fd %s from epoll", fileno)
         except Exception:
             pass
         self._channels.pop(fileno, None)
@@ -98,9 +102,10 @@ class EventLoop:
         #     flag |= select.EPOLLET
         channel.set_flag(flag)
         self._epoll.register(channel, flag)
+        logger.debug("registered fd %s to poll with flag: %s", channel.fileno(), flag)
         self._total_registered += 1
         self._channels[channel.fileno()] = channel
-        logger.debug(f"Registered {sockinfo(sock)} with flag: {flag}")
+
         cf = channel_future or ChannelFuture()
         cf.set(channel)
         return cf
@@ -113,17 +118,18 @@ class EventLoop:
     def _process_task_queue(self):
         while not self._taskq.empty():
             task = self._taskq.get()
-            logger.debug(f"Runing task: {task}")
+            logger.debug("task to run: %s", task)
             try:
+                start = time.time()
                 task()
             except Exception:
-                logger.exception(f"Error running task: {task}")
-            logger.debug(f"Task done: {task}")
+                logger.exception("error when running task: %s", task)
+            logger.debug("task finished in %sms: %s", int((time.time() - start) * 1000), task)
             self._total_tasks_processed += 1
 
     def _close_channel_internally(self, channel, reason=''):
         assert self.in_eventloop(), "Must be in event loop"
-        logger.debug(f"closing channel(active:{channel.is_active()}) internally: {channel.fileno0()}, reason: {reason}")
+        logger.debug(f"closing channel internally (reason: {reason}): {channel}")
         channel.socket().close()
         channel.close_future().set(channel)
         channel.set_active(False)
@@ -138,66 +144,85 @@ class EventLoop:
                 channel = self._channels.get(fileno)
                 if not channel:
                     fdname = f"unknown({fileno})"
-                elif channel.is_server():
-                    fdname = f"server({fileno})"
                 else:
-                    fdname = f"client({fileno})"
+                    fdname = "%s(%s/%s)" % ('server' if channel.is_server() else 'client', fileno, channel.id()[:8])
 
             flags = []
             if flag & select.POLLIN:
-                flags.append("POLLIN")
+                flags.append("R")
             if flag & select.POLLOUT:
-                flags.append("POLLOUT")
+                flags.append("W")
             if flag & select.POLLHUP:
-                flags.append("POLLHUP")
+                flags.append("H")
             flags_str = "|".join(flags)
             result.append(f"{fdname}:{flags_str}")
         return ", ".join(result)
 
-    def _show_debug_info(self, n=25):
-        logger.debug(f'{"=" * n} {threading.current_thread().name} {"=" * n}')
+    def _show_debug_info(self, n=50):
+        # logger.debug(f'{"=" * n} {threading.current_thread().name} {"=" * n}')
+        logger.debug(" counters ".center(n, '='))
+        logger.debug("pending tasks:            %s", self._taskq.qsize())
+        logger.debug("total sent bytes:         %s", self._total_sent)
+        logger.debug("total received:           %s", self._total_received)
+        logger.debug("total registered:         %s", self._total_registered)
+        logger.debug("total accepted:           %s", self._total_accepted)
+        logger.debug("total tasks submitted:    %s", self._total_tasks_submitted)
+        logger.debug("total tasks processed:    %s", self._total_tasks_processed)
+        logger.debug("total active connections: %s", len(self._channels))
 
-        logger.debug("[Counter] TaskQ: %s", self._taskq.qsize())
-        logger.debug("[Counter] Total sent: %s", self._total_sent)
-        logger.debug("[Counter] Total received: %s", self._total_received)
-        logger.debug("[Counter] Total registered: %s", self._total_registered)
-        logger.debug("[Counter] Total accepted: %s", self._total_accepted)
-        logger.debug("[Counter] Total tasks submitted: %s", self._total_tasks_submitted)
-        logger.debug("[Counter] Total tasks processed: %s", self._total_tasks_processed)
-        logger.debug("[Counter] Total current conns: %s", len(self._channels))
+        logger.debug(" channels ".center(n, '='))
+        for channel in self._channels.values():
+            logger.debug(f"{channel}")
+
+        logger.debug(" pendings ".center(n, '='))
+        for channel in self._channels.values():
+            if channel.is_server():  # server channel has no pendings
+                continue
+            channel_id = channel.id()
+            if not channel.has_pendings():
+                # logger.debug(f"{channel_id}: no pendings")
+                continue
+            chunk_count = 0
+            bytes_count = 0
+            for chunk in channel.pendings():
+                chunk_count += 1
+                bytes_count += len(chunk)
+            logger.debug(f"{channel_id}: {chunk_count} chunks, {bytes_count} bytes in total")
+
+    def _poll(self) -> List[Tuple[int, int]]:
+        if logger.isEnabledFor(logging.DEBUG):
+            events = self._epoll.poll(DEBUG_INTERVAL_SECONDS * (1 if self._linux else 1000))
+        else:
+            events = self._epoll.poll()
+
+        if not events and logger.isEnabledFor(logging.DEBUG):  # poll is interrupted by timeout
+            self._show_debug_info()
+            pass
+        if events:
+            logger.debug("events polled: %s", self._events_to_str(events))
+
+        return events
 
     @log(logger)
     def _start(self):
         self._thread = threading.current_thread()
         self._start_barrier.set()
-        logger.debug(f"EventLoop (EventFD:{hex(id(self._eventfd))}) started in thread: {self._thread.name}")
+        logger.debug(f"eventloop (EventFD:{hex(id(self._eventfd))}) started in thread: {self._thread.name}")
         while True:
             if self._stop_polling:
                 self._epoll.close()
+                logger.debug(f"eventloop (EventFD:{hex(id(self._eventfd))}) closed in thread: {self._thread.name}")
                 return
 
-            # events = self._epoll.poll(10 if logger.isEnabledFor(logging.DEBUG) else None)
-            if logger.isEnabledFor(logging.DEBUG):
-                seconds = 10
-                events = self._epoll.poll(seconds * (1 if self._linux else 1000))
-            else:
-                events = self._epoll.poll()
-
-            if not events and logger.isEnabledFor(logging.DEBUG):
-                self._show_debug_info()
-                pass
-            if events:
-                logger.debug("Events: %s", self._events_to_str(events))
-
-            for fileno, event in events:
+            for fileno, event in self._poll():
                 if fileno == self._eventfd.fileno():  # just to wake up from epoll
-                    logger.debug("Interrupted")
+                    logger.debug("EventFD %s interrupted", hex(id(self._eventfd)))
                     self._eventfd.unsafe_read()
                     continue
 
                 channel = self._channels.get(fileno)
                 if not channel:
-                    logger.error("Channel not found: %s", fileno)
+                    logger.error("channel not found by fileno: %s", fileno)
                     continue
 
                 if channel.is_server():
@@ -207,8 +232,8 @@ class EventLoop:
                         server_channel.handler().channel_active(server_channel.context())
                     for client_sock, client_addr in server_channel.acceptall():
                         self._total_accepted += 1
-                        logger.debug("Accepted: %s, address: %s, total: %s", sockinfo(client_sock), client_addr, self._total_accepted)
-                        server_channel.handler().initialize_child(server_channel.context(), client_sock)
+                        logger.debug("accepted: %s, address: %s", sockinfo(client_sock), client_addr)
+                        server_channel.handler().channel_read(server_channel.context(), client_sock)
                     continue
 
                 if event & select.POLLOUT:
@@ -220,8 +245,8 @@ class EventLoop:
                     while True:
                         head, *tail = chunks
                         if head.close:  # denote to close locally
-                            logger.debug("Hit Chunk with close indicator: %s", sockinfo(channel.socket()))
-                            self._close_channel_internally(channel, 'hit chunk with close indicator')
+                            logger.debug("process chunk with close indicator: %s", channel)
+                            self._close_channel_internally(channel, 'chunk with close indicator')
                             break
                         l0 = len(head.buffer)
                         head.buffer = channel.try_send(head.buffer)

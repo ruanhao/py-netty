@@ -83,9 +83,10 @@ def sockinfo(sock):
         return f"[id: {sock_id}, fd: {fileno}, L:/{s_addr}:{s_port} - R:/{d_addr}:{d_port}]"
     except Exception:
         if s_addr:
-            return f"[id: {sock_id}, fd: {fileno}, LISTENING]"
+            return f"[id: {sock_id}, fd: {fileno}, L:/{s_addr}:{s_port}]"
         else:
-            return f"[id: {sock_id}, fd: {fileno}, CLOSED]"
+            # return f"[id: {sock_id}, fd: {fileno}, CLOSED]"
+            return str(sock)
 
 
 def create_thread_pool(n=None, prefix=''):
