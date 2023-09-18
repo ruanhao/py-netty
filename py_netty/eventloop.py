@@ -229,10 +229,13 @@ class EventLoop:
     def _process_connection_timout(self):
         if not self._connect_timeout_due_millis:
             return
-        logger.debug(f"checking connection timeout: {self._connect_timeout_due_millis}")
+        current = int(time.time() * 1000)
+        if logger.isEnabledFor(logging.DEBUG):
+            due_diff = {k: f"{max(0, v - current)}ms" for k, v in self._connect_timeout_due_millis.items()}
+            logger.debug("checking connection timeout, countdowns: %s", due_diff)
         to_delete = []
         for fd, due_millis in self._connect_timeout_due_millis.items():
-            if due_millis <= int(time.time() * 1000):
+            if due_millis <= current:
                 channel = self._channels.get(fd)
                 if channel and not channel._ever_active:
                     logger.error(f"connection timeout: {channel}")

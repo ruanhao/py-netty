@@ -28,7 +28,7 @@ class AbstractChannel:
         self._flag = 0          # intrested events
         self._server_channel = False
         self._ever_active = False
-        self.__str__()          # load sockinfo
+        self._sockinfo = None
 
     def id(self):
         return str(hex(id(self.socket())))
@@ -95,6 +95,10 @@ class AbstractChannel:
             return False
         return self._active
 
+    def _refresh_sock_info(self) -> str:
+        self._sockinfo = None
+        return str(self)
+
     @log(logger)
     def set_active(self, active, reason=''):
         origin = self._active
@@ -104,6 +108,7 @@ class AbstractChannel:
         if origin is True and active is False:
             self.handler().channel_inactive(self.context())
         if origin is False and active is True:
+            self._refresh_sock_info()
             self._ever_active = True
             self.handler().channel_active(self.context())
 
@@ -140,7 +145,7 @@ class AbstractChannel:
         return self._eventloop.in_eventloop()
 
     def __str__(self):
-        if not hasattr(self, '_sockinfo'):
+        if not self._sockinfo:
             self._sockinfo = sockinfo(self._socket)
         if not self._ever_active:
             return self._sockinfo.replace('-', '?')
