@@ -14,7 +14,7 @@ def _handler_initializer():
     return EchoChannelHandler()
 
 
-@dataclasses.dataclass(kw_only=True)
+@dataclasses.dataclass
 class Bootstrap:
     eventloop_group: EventLoopGroup = dataclasses.field(default_factory=EventLoopGroup)
     handler_initializer: typing.Callable = _handler_initializer
@@ -30,7 +30,7 @@ class Bootstrap:
         ).register()
 
 
-@dataclasses.dataclass(kw_only=True)
+@dataclasses.dataclass
 class ServerBootstrap:
     parant_group: EventLoopGroup = dataclasses.field(default_factory=EventLoopGroup)
     child_group: EventLoopGroup = dataclasses.field(default_factory=EventLoopGroup)

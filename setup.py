@@ -7,7 +7,7 @@ long_description = (this_directory / "README.md").read_text()
 # install_requires = (this_directory / 'requirements.txt').read_text().splitlines()
 
 
-epoch = 10
+epoch = 11
 
 major = int(epoch / 100 / 100)
 minor = int(epoch / 100 % 100)
