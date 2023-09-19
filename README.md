@@ -1,8 +1,11 @@
 # py-netty :rocket:
 
-An epoll-based TCP networking library for Python 3.7+.
+An epoll-based event-driven TCP networking framework.
 
-APIs are similar to the [Netty](https://netty.io/) framework.
+Ideas and concepts under the hood are build upon those of [Netty](https://netty.io/), especially the IO and executor model.
+
+APIs are intuitive to use if you are a Netty alcoholic.
+
 
 
 
@@ -44,9 +47,6 @@ channel.close()
 TCP port forwarding:
 
 ```python
-#! /usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 from py_netty import ServerBootstrap, Bootstrap, ChannelHandlerAdapter, EventLoopGroup
 
 
@@ -95,10 +95,18 @@ sb = ServerBootstrap(
 sb.bind(port=8443).close_future().sync()
 ```
 
+
 ## Performance Test
 
 ![RTT with small packet](https://raw.githubusercontent.com/ruanhao/py-netty/master/rtts_512_32.png)
 
 ![RTT with large packet](https://raw.githubusercontent.com/ruanhao/py-netty/master/rtts_512_2048.png)
+
+
+## Caveats
+
+- No pipeline, supports only one handler FOR NOW
+- No batteries-included codecs FOR NOW
+- No pool or refcnt for bytes buffer, bytes objects are created and consumed at your disposal
 
 
