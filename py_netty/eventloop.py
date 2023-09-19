@@ -75,6 +75,7 @@ class EventLoop:
         try:
             self._epoll.unregister(fileno)
             logger.debug("unregistered fd %s from epoll", fileno)
+            channel.handler_context().fire_channel_unregistered()
         except Exception:
             pass
         self._channels.pop(fileno, None)
@@ -106,6 +107,7 @@ class EventLoop:
         #     flag |= select.EPOLLET
         channel.set_flag(flag)
         self._epoll.register(channel, flag)
+        channel.handler_context().fire_channel_registered()
         logger.debug("registered fd %s to poll with flag: %s (%s)", channel.fileno(), flag, self._flag_to_str(flag))
         self._total_registered += 1
         self._channels[channel.fileno()] = channel
@@ -234,7 +236,7 @@ class EventLoop:
             due_diff = {k: f"{max(0, v - current)}ms" for k, v in self._connect_timeout_due_millis.items()}
             logger.debug("checking connection timeout, countdowns: %s", due_diff)
         to_delete = []
-        for fd, due_millis in self._connect_timeout_due_millis.items():
+        for fd, due_millis in dict(self._connect_timeout_due_millis).items():
             if due_millis <= current:
                 channel = self._channels.get(fd)
                 if channel and not channel._ever_active:
@@ -242,7 +244,7 @@ class EventLoop:
                     self._close_channel_internally(channel, reason='connect timeout')
                 to_delete.append(fd)
         for fd in to_delete:
-            del self._connect_timeout_due_millis[fd]
+            self._connect_timeout_due_millis.pop(fd, None)
 
     def _check_channel_active(self, channel):
         if not channel._ever_active:  # first time to be active
@@ -278,7 +280,7 @@ class EventLoop:
                     for client_sock, client_addr in server_channel.acceptall():
                         self._total_accepted += 1
                         logger.debug("accepted: %s, address: %s", sockinfo(client_sock), client_addr)
-                        server_channel.handler().channel_read(server_channel.context(), client_sock)
+                        server_channel.handler_context().fire_channel_read(client_sock)
                     continue
 
                 if event & select.POLLOUT:
@@ -313,7 +315,7 @@ class EventLoop:
                     if buffer:
                         self._check_channel_active(channel)
                         # logger.info("receive: %s bytes: %s", len(buffer), buffer.decode('utf-8').replace('\n', '\\n'))
-                        channel.handler().channel_read(channel.context(), buffer)
+                        channel.handler_context().fire_channel_read(buffer)
                     else:       # EOF
                         self._close_channel_internally(channel, 'EOF')
                         continue

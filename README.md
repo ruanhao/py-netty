@@ -9,7 +9,7 @@ APIs are similar to the [Netty](https://netty.io/) framework.
 ## Installation
 
 ```bash
-python -m pip install py-netty
+pip install py-netty
 ```
 
 ## Getting Started
@@ -73,6 +73,9 @@ class ProxyChannelHandler(ChannelHandlerAdapter):
                 handler_initializer=__ChannelHandler
             ).connect(self._remote_host, self._remote_port).channel()
         return self._client
+
+    def exception_caught(self, ctx, exception):
+        ctx.close()
 
     def channel_read(self, ctx, bytebuf):
         self._client_channel(ctx).write(bytebuf)

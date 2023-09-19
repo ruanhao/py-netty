@@ -1,12 +1,13 @@
-from dataclasses import dataclass, field
-from concurrent.futures import Future
 import socket
 import select
 import logging
+from functools import wraps
 from .utils import sockinfo, log
-from .handler import LoggingChannelHandler
-from typing import Callable, List
+from typing import Callable, List, Union
+from concurrent.futures import Future
+from dataclasses import dataclass, field
 from .bytebuf import Chunk, EMPTY_BUFFER
+from .handler import LoggingChannelHandler
 
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,9 @@ class AbstractChannel:
             self._handler = self._handler_initializer()
         return self._handler
 
+    def handler_context(self) -> 'ChannelHandlerContext':
+        return ChannelHandlerContext(self)
+
     def is_server(self):
         """Returns True if this channel is related to a server listening socket, False otherwise."""
         return self._server_channel
@@ -106,11 +110,11 @@ class AbstractChannel:
             logger.debug("set channel %s active status: %s, reason: %s", self.id(), active, reason)
         self._active = active
         if origin is True and active is False:
-            self.handler().channel_inactive(self.context())
+            self.handler_context().fire_channel_inactive()
         if origin is False and active is True:
             self._refresh_sock_info()
             self._ever_active = True
-            self.handler().channel_active(self.context())
+            self.handler_context().fire_channel_active()
 
     def close(self, force=False):
         if force:
@@ -245,6 +249,61 @@ class ChannelContext:
 
     def channel(self):
         return self._channel
+
+
+@dataclass
+class ChannelHandlerContext:
+
+    _channel: AbstractChannel
+
+    def close(self):
+        self._channel.close()
+
+    def write(self, bytebuf):
+        self._channel.write(bytebuf)
+
+    def channel(self):
+        return self._channel
+
+    def handler(self):
+        return self._channel.handler()
+
+    def fire_exception_caught(self, exception):
+        try:
+            self.handler().exception_caught(self, exception)
+        except Exception:
+            logger.exception(f"Exception caught while handling exception: {exception}")
+
+    @staticmethod
+    def catch_exception(func):
+        @wraps(func)
+        def inner(self, *args, **kwargs):
+            try:
+                func(self, *args, **kwargs)
+            except Exception as e:
+                self.fire_exception_caught(e)
+
+        return inner
+
+    @catch_exception
+    def fire_channel_registered(self):
+        self.handler().channel_registered(self)
+
+    @catch_exception
+    def fire_channel_unregistered(self):
+        self.handler().channel_unregistered(self)
+
+    @catch_exception
+    def fire_channel_read(self, msg: Union[bytes, socket.socket]):
+        self.handler().channel_read(self, msg)
+
+    @catch_exception
+    def fire_channel_active(self):
+        self.handler().channel_active(self)
+
+    @catch_exception
+    def fire_channel_inactive(self):
+        self.handler().channel_inactive(self)
 
 
 @dataclass
