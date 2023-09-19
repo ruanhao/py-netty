@@ -40,6 +40,8 @@ class EventLoop:
         self._taskq = queue.Queue()
 
         # counters
+        self._eventfd_read_count = 0
+        self._eventfd_write_count = 0
         self._total_accepted = 0
         self._total_sent = 0
         self._total_received = 0
@@ -65,6 +67,12 @@ class EventLoop:
         if desc:
             logger.debug(f"interrupting eventloop with EventFD {hex(id(self._eventfd))} in {self._thread.name}: {desc}")
         self._eventfd.unsafe_write()
+
+        if not logger.isEnabledFor(logging.DEBUG):
+            return
+        # only in debug mode to accumulate counter
+        with self._lock:
+            self._eventfd_write_count += 1
 
     def unregister(self, channel: AbstractChannel, channel_future: ChannelFuture = None):
         cf = channel_future or ChannelFuture()
@@ -160,6 +168,8 @@ class EventLoop:
     def _show_debug_info(self, n=50):
         # logger.debug(f'{"=" * n} {threading.current_thread().name} {"=" * n}')
         logger.debug(" counters ".center(n, '='))
+        logger.debug("eventfd writes:        %s", self._eventfd_write_count)
+        logger.debug("eventfd reads:         %s", self._eventfd_read_count)
         logger.debug("pending tasks:         %s", self._taskq.qsize())
         logger.debug("total sent bytes:      %s", self._total_sent)
         logger.debug("total received:        %s", self._total_received)
@@ -266,6 +276,7 @@ class EventLoop:
                 if fileno == self._eventfd.fileno():  # just to wake up from epoll
                     logger.debug("EventFD %s interrupted", hex(id(self._eventfd)))
                     self._eventfd.unsafe_read()
+                    self._eventfd_read_count += 1
                     continue
 
                 channel = self._channels.get(fileno)
