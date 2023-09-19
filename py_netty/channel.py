@@ -251,6 +251,17 @@ class ChannelContext:
         return self._channel
 
 
+# annotation
+def _catch_exception(func):
+    @wraps(func)
+    def inner(self, *args, **kwargs):
+        try:
+            func(self, *args, **kwargs)
+        except Exception as e:
+            self.fire_exception_caught(e)
+    return inner
+
+
 @dataclass
 class ChannelHandlerContext:
 
@@ -274,34 +285,23 @@ class ChannelHandlerContext:
         except Exception:
             logger.exception(f"Exception caught while handling exception: {exception}")
 
-    @staticmethod
-    def catch_exception(func):
-        @wraps(func)
-        def inner(self, *args, **kwargs):
-            try:
-                func(self, *args, **kwargs)
-            except Exception as e:
-                self.fire_exception_caught(e)
-
-        return inner
-
-    @catch_exception
+    @_catch_exception
     def fire_channel_registered(self):
         self.handler().channel_registered(self)
 
-    @catch_exception
+    @_catch_exception
     def fire_channel_unregistered(self):
         self.handler().channel_unregistered(self)
 
-    @catch_exception
+    @_catch_exception
     def fire_channel_read(self, msg: Union[bytes, socket.socket]):
         self.handler().channel_read(self, msg)
 
-    @catch_exception
+    @_catch_exception
     def fire_channel_active(self):
         self.handler().channel_active(self)
 
-    @catch_exception
+    @_catch_exception
     def fire_channel_inactive(self):
         self.handler().channel_inactive(self)
 
