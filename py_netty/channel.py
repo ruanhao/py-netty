@@ -1,4 +1,5 @@
 import socket
+import ssl
 import select
 import logging
 from functools import wraps
@@ -209,17 +210,43 @@ class NioSocketChannel(AbstractChannel):
                 break
         return bytebuf[total_sent:]
 
-    def recvall(self) -> bytes:
+    def recvall(self) -> (bytes, bool):
+        # if isinstance(self.socket(), ssl.SSLSocket):
+        #     return self.recvall_ssl()
         buffer = b''
         while True:
             try:
                 received = self.socket().recv(1024)
                 if not received:  # EOF
-                    return buffer
+                    return buffer, True
                 buffer += received
+            except ssl.SSLWantReadError:  # for ssl socket
+                if self.is_readable():
+                    continue
+                return buffer, False
             except socket.error:
-                return buffer
-        pass
+                return buffer, False
+
+    def is_readable(self) -> bool:
+        try:
+            return not self.socket().recv(16, socket.MSG_DONTWAIT | socket.MSG_PEEK) == b''
+        except Exception:
+            return False
+
+    # def recvall_ssl(self) -> (bytes, bool):
+    #     buffer = b''
+    #     while True:
+    #         try:
+    #             received = self.socket().recv(1024)
+    #             buffer += received
+    #             if not received:  # EOF
+    #                 return buffer, True
+    #         except ssl.SSLWantReadError:
+    #             if self.is_readable():
+    #                 continue
+    #             return buffer, False
+    #         except socket.error:
+    #             return buffer, False
 
 
 class NioServerSocketChannel(AbstractChannel):

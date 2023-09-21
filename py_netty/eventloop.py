@@ -201,7 +201,7 @@ class EventLoop:
 
     def _millis_to_wait_for_connect_timeout(self) -> int:  # in milliseconds
         if not self._connect_timeout_due_millis:
-            return -1 # wait forever
+            return -1  # wait forever
         min_timeout = min(self._connect_timeout_due_millis.values())  # nearest timeout
         return max(0, min_timeout - int(time.time() * 1000))
 
@@ -321,13 +321,13 @@ class EventLoop:
                             channel.remove_flag(select.POLLOUT)
 
                 if event & select.POLLIN and fileno in self._channels:
-                    buffer = channel.recvall()
+                    buffer, eof = channel.recvall()
                     self._total_received += len(buffer)
                     if buffer:
                         self._check_channel_active(channel)
                         # logger.info("receive: %s bytes: %s", len(buffer), buffer.decode('utf-8').replace('\n', '\\n'))
                         channel.handler_context().fire_channel_read(buffer)
-                    else:       # EOF
+                    elif eof:
                         self._close_channel_internally(channel, 'EOF')
                         continue
 

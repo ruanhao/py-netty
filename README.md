@@ -24,6 +24,13 @@ from py_netty import ServerBootstrap
 ServerBootstrap().bind(address='0.0.0.0', port=8080).close_future().sync()
 ```
 
+Start an echo server (TLS):
+
+```python
+from py_netty import ServerBootstrap
+ServerBootstrap(certfile='/path/to/cert/file', keyfile='/path/to/cert/file').bind(address='0.0.0.0', port=9443).close_future().sync()
+```
+
 As TCP client:
 
 ```python
@@ -37,6 +44,27 @@ class HttpHandler(ChannelHandlerAdapter):
 
 remote_address, remote_port = 'www.google.com', 80
 b = Bootstrap(handler_initializer=HttpHandler)
+channel = b.connect(remote_address, remote_port).sync().channel()
+request = f'GET / HTTP/1.1\r\nHost: {remote_address}\r\n\r\n'
+channel.write(request.encode('utf-8'))
+input() # pause
+channel.close()
+```
+
+
+As TCP client (TLS):
+
+```python
+from py_netty import Bootstrap, ChannelHandlerAdapter
+
+
+class HttpHandler(ChannelHandlerAdapter):
+    def channel_read(self, ctx, buffer):
+        print(buffer.decode('utf-8'))
+        
+
+remote_address, remote_port = 'www.google.com', 443
+b = Bootstrap(handler_initializer=HttpHandler, tls=True, verify=True)
 channel = b.connect(remote_address, remote_port).sync().channel()
 request = f'GET / HTTP/1.1\r\nHost: {remote_address}\r\n\r\n'
 channel.write(request.encode('utf-8'))
