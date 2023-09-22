@@ -123,6 +123,44 @@ sb = ServerBootstrap(
 sb.bind(port=8443).close_future().sync()
 ```
 
+## Event-driven callbacks
+
+Create handler with callbacks for interested events:
+
+``` python
+from py_netty import ChannelHandlerAdapter
+
+
+class MyChannelHandler(ChannelHandlerAdapter):
+    def channel_active(self, ctx: 'ChannelHandlerContext') -> None:
+        # invoked when channel is active (TCP connection ready)
+        pass
+
+    def channel_read(self, ctx: 'ChannelHandlerContext', msg: Union[bytes, socket.socket]) -> None:
+        # invoked when there is data ready to process
+        pass
+
+    def channel_inactive(self, ctx: 'ChannelHandlerContext') -> None:
+        # invoked when channel is inactive (TCP connection is broken)
+        pass
+
+    def channel_registered(self, ctx: 'ChannelHandlerContext') -> None:
+        # invoked when the channel is registered with a eventloop
+        pass
+
+    def channel_unregistered(self, ctx: 'ChannelHandlerContext') -> None:
+        # invoked when the channel is unregistered from a eventloop
+        pass
+
+    def channel_handshake_complete(self, ctx: 'ChannelHandlerContext') -> None:
+        # invoked when ssl handshake is complete, this only applies to client side
+        pass
+
+    def exception_caught(self, ctx: 'ChannelHandlerContext', exception: Exception) -> None:
+        # invoked when there is any exception raised during process
+        pass
+```
+
 
 ## Performance Test
 
