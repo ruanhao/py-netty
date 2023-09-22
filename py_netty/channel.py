@@ -1,17 +1,19 @@
-import socket
 import ssl
+import time
+import socket
+import errno
 import select
 import logging
 from functools import wraps
-from .utils import sockinfo, log
-from typing import Callable, List, Union
 from concurrent.futures import Future
+from typing import Callable, List, Union
 from dataclasses import dataclass, field
 from .bytebuf import Chunk, EMPTY_BUFFER
 from .handler import LoggingChannelHandler
+from .utils import sockinfo, log, LoggerAdapter
 
 
-logger = logging.getLogger(__name__)
+logger = LoggerAdapter(logging.getLogger(__name__))
 
 
 @dataclass
@@ -115,6 +117,25 @@ class AbstractChannel:
         if origin is False and active is True:
             self._refresh_sock_info()
             self._ever_active = True
+            if isinstance(self.socket(), ssl.SSLSocket):
+                try:
+                    s = time.time()
+                    self.socket().do_handshake(True)
+                    cost = round((time.time() - s) * 1000, 2)  # milliseconds
+                    if cost > 1000:
+                        logger.warning("ssl handshake cost: ~%sms", cost)
+                except socket.timeout:
+                    logger.exception("ssl handshake timeout")
+                    self.close(True)
+                except socket.error as socket_err:
+                    if errno.ENOTCONN is not socket_err.errno:
+                        logger.debug("ssl handshake error: %s", str(socket_err))
+                else:
+                    self.handler_context().fire_channel_handshake_complete()
+                # finally:
+                #     with suppress(Exception):
+                #         self.socket().settimeout(0)
+
             self.handler_context().fire_channel_active()
 
     def close(self, force=False):
@@ -164,7 +185,10 @@ class NioSocketChannel(AbstractChannel):
     def __init__(self, eventloop: 'EventLoop', sock: socket.socket, handler_initializer: Callable, connect_timeout_millis: int = 3000):
         super().__init__(eventloop, sock, handler_initializer)
         self._pendings = []     # [Chunk, ...]
-        self.socket().setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        try:
+            self.socket().setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:
+            logger.exception("setsockopt TCP_NODELAY failed")
         self._connect_timeout_millis = connect_timeout_millis
 
     def connect_timeout_millis(self) -> int:
@@ -203,7 +227,8 @@ class NioSocketChannel(AbstractChannel):
         while total_sent < len(bytebuf):
             try:
                 total_sent += self.socket().send(bytebuf[total_sent:])
-            except socket.error:
+            except socket.error as socket_err:
+                logger.debug("try_send socket.error: %s, spin: %s", str(socket_err), spin)
                 if spin > 0:
                     spin -= 1
                     continue
@@ -220,11 +245,15 @@ class NioSocketChannel(AbstractChannel):
                 if not received:  # EOF
                     return buffer, True
                 buffer += received
-            except ssl.SSLWantReadError:  # for ssl socket
+            # except ssl.SSLWantReadError:  # for ssl socket
+            #     logger.debug("recvall ssl.SSLWantReadError, readable: %s", self.is_readable())
+            #     if self.is_readable():
+            #         continue
+            #     return buffer, False
+            except socket.error as socket_err:
+                logger.debug("recvall socket.error: %s, readable: %s", str(socket_err), self.is_readable())
                 if self.is_readable():
                     continue
-                return buffer, False
-            except socket.error:
                 return buffer, False
 
     def is_readable(self) -> bool:
@@ -331,6 +360,10 @@ class ChannelHandlerContext:
     @_catch_exception
     def fire_channel_inactive(self):
         self.handler().channel_inactive(self)
+
+    @_catch_exception
+    def fire_channel_handshake_complete(self):
+        self.handler().channel_handshake_complete(self)
 
 
 @dataclass

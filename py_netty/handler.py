@@ -31,6 +31,10 @@ class AbstractChannelHandler(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def channel_handshake_complete(self, ctx: 'ChannelHandlerContext') -> None:
+        pass
+
+    @abc.abstractmethod
     def exception_caught(self, ctx: 'ChannelHandlerContext', exception: Exception) -> None:
         pass
 
@@ -50,6 +54,9 @@ class ChannelHandlerAdapter(AbstractChannelHandler):
         pass
 
     def channel_unregistered(self, ctx: 'ChannelHandlerContext') -> None:
+        pass
+
+    def channel_handshake_complete(self, ctx: 'ChannelHandlerContext') -> None:
         pass
 
     def exception_caught(self, ctx: 'ChannelHandlerContext', exception: Exception) -> None:
@@ -76,6 +83,9 @@ class LoggingChannelHandler(AbstractChannelHandler):
 
     def channel_unregistered(self, ctx: 'ChannelHandlerContext') -> None:
         logger.debug("[Channel Unregistered] %s", ctx.channel())
+
+    def channel_handshake_complete(self, ctx: 'ChannelHandlerContext') -> None:
+        logger.debug("[Channel Handshake Complete] %s", ctx.channel())
 
     def exception_caught(self, ctx: 'ChannelHandlerContext', exception: Exception) -> None:
         logger.error("[Exception Caught] %s : %s", ctx.channel(), str(exception), exc_info=exception)

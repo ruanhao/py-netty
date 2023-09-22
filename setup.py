@@ -6,11 +6,7 @@ this_directory = Path(__file__).parent
 long_description = (this_directory / "README.md").read_text()
 # install_requires = (this_directory / 'requirements.txt').read_text().splitlines()
 
-epoch = 17
-
-major = int(epoch / 100 / 100)
-minor = int(epoch / 100 % 100)
-micro = int(epoch % 100)
+version = '0.0.18'
 
 config = {
     'name': 'py-netty',
@@ -21,8 +17,8 @@ config = {
     'description': 'TCP framework in flavor of Netty',
     'author' : 'Hao Ruan',
     'author_email': 'ruanhao1116@gmail.com',
-    'keywords': ['network', 'tcp'],
-    'version': f'{major}.{minor}.{micro}',
+    'keywords': ['network', 'tcp', 'non-blocking', 'epoll', 'nio', 'netty'],
+    'version': version,
     'packages': find_packages(),
     'install_requires': [],
     'python_requires': ">=3.7, <4",

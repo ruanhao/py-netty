@@ -41,7 +41,8 @@ class Bootstrap:
 
     def connect(self, address, port, ensure_connected: bool = False) -> ChannelFuture:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        if ensure_connected or self.tls:
+        # if ensure_connected or self.tls:
+        if ensure_connected:
             sock.connect((address, port))
             if self.tls:
                 sock = _client_ssl_context(self.verify).wrap_socket(sock, server_hostname=address)
@@ -49,7 +50,7 @@ class Bootstrap:
         else:
             sock.setblocking(False)
             if self.tls:
-                sock = _client_ssl_context(self.verify).wrap_socket(sock, do_handshake_on_connect=False, server_hostname=address)
+                sock = _client_ssl_context(self.verify).wrap_socket(sock, server_hostname=address)
             sock.connect_ex((address, port))  # non blocking
         return NioSocketChannel(
             self.eventloop_group.get_eventloop(),
