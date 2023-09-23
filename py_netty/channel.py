@@ -26,13 +26,17 @@ class AbstractChannel:
     def __post_init__(self):
         self._fileno = self._socket.fileno()
         assert self._fileno > 0
-        self._close_future = ChannelFuture()
+        self._close_future = ChannelFuture(self)
         self._active = False
         self._handler = None    # lazy initialization
         self._flag = 0          # intrested events
         self._server_channel = False
         self._ever_active = False
         self._sockinfo = None
+        self._channel_future = ChannelFuture(self)
+
+    def channel_future(self) -> 'ChannelFuture':
+        return self._channel_future
 
     def id(self):
         return str(hex(id(self.socket())))
@@ -128,8 +132,9 @@ class AbstractChannel:
                     logger.exception("ssl handshake timeout")
                     self.close(True)
                 except socket.error as socket_err:
-                    if errno.ENOTCONN is not socket_err.errno:
-                        logger.debug("ssl handshake error: %s", str(socket_err))
+                    logger.debug("ssl handshake error: %s", str(socket_err))
+                    # if errno.ENOTCONN is not socket_err.errno:
+                    #     logger.debug("ssl handshake error: %s", str(socket_err))
                 else:
                     self.handler_context().fire_channel_handshake_complete()
                 # finally:
@@ -213,7 +218,7 @@ class NioSocketChannel(AbstractChannel):
         return len(self._pendings) > 0
 
     def write(self, buffer, channel_future: 'ChannelFuture' = None) -> 'ChannelFuture':
-        cf = channel_future or ChannelFuture()
+        cf = channel_future or ChannelFuture(self)
         if not self.in_eventloop():
             self._eventloop.submit_task(lambda: self.write(buffer, cf))
             return cf
@@ -369,13 +374,14 @@ class ChannelHandlerContext:
 @dataclass
 class ChannelFuture:
 
+    _channel: AbstractChannel
     future: Future = None
 
     def __post_init__(self):
         self.future = self.future or Future()
 
     def channel(self) -> AbstractChannel:
-        return self.future.result()
+        return self._channel
 
     def close_future(self) -> 'ChannelFuture':
         return self.channel().close_future()

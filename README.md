@@ -99,7 +99,7 @@ class ProxyChannelHandler(ChannelHandlerAdapter):
             self._client = Bootstrap(
                 eventloop_group=self._client_eventloop_group,
                 handler_initializer=__ChannelHandler
-            ).connect(self._remote_host, self._remote_port).channel()
+            ).connect(self._remote_host, self._remote_port).sync().channel()
         return self._client
 
     def exception_caught(self, ctx, exception):

@@ -75,7 +75,7 @@ class EventLoop:
             self._eventfd_write_count += 1
 
     def unregister(self, channel: AbstractChannel, channel_future: ChannelFuture = None):
-        cf = channel_future or ChannelFuture()
+        cf = channel_future or ChannelFuture(channel)
         if not self.in_eventloop():
             self.submit_task(lambda: self.unregister(channel, cf))
             return cf
@@ -97,13 +97,12 @@ class EventLoop:
     def _flag_to_str(self, flag):
         return "|".join([k for k, v in select.__dict__.items() if k.startswith("POLL") and v & flag])
 
-    def register(self, channel: AbstractChannel, channel_future: ChannelFuture = None) -> ChannelFuture:
+    def register(self, channel: AbstractChannel) -> ChannelFuture:
         self.start()
-        cf = channel_future or ChannelFuture()
 
         if not self.in_eventloop():
-            self.submit_task(lambda: self.register(channel, cf))
-            return cf
+            self.submit_task(lambda: self.register(channel))
+            return channel.channel_future()
 
         channel.socket().setblocking(False)
 
@@ -122,8 +121,8 @@ class EventLoop:
         if not channel.is_server():
             self._connect_timeout_due_millis[channel.fileno()] = int(time.time() * 1000) + channel.connect_timeout_millis()
 
-        cf.set(channel)
-        return cf
+        # cf.set(channel)
+        return channel.channel_future()
 
     def stop(self):
         logger.debug("stopping epoll")
@@ -256,9 +255,10 @@ class EventLoop:
         for fd in to_delete:
             self._connect_timeout_due_millis.pop(fd, None)
 
-    def _check_channel_active(self, channel):
+    def _check_channel_active(self, channel: AbstractChannel):
         if not channel._ever_active:  # first time to be active
             channel.set_active(True, 'first time to be active')
+            channel.channel_future().set(channel)
             self._connect_timeout_due_millis.pop(channel.fileno(), None)
 
     @log(logger)
