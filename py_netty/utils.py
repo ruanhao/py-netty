@@ -11,69 +11,8 @@ from concurrent import futures
 _counter = itertools.count()
 
 
-# TODO add a context manager to recover the origin blocking mode
-def acceptall(sock: socket.socket) -> list:
-    result = []
-    origin_blocking = sock.getblocking()
-    if origin_blocking:
-        sock.setblocking(0)
-    try:
-        while True:
-            try:
-                result.append(sock.accept())
-            except socket.error:
-                return result
-    finally:
-        if origin_blocking:
-            sock.setblocking(origin_blocking)
-
-
-def recvall(sock, timeout=0):
-    """if timeout is non-zero, it will block at the first time"""
-    buffer = b''
-    origin_blocking = sock.getblocking()
-    if origin_blocking:
-        sock.setblocking(0)
-    try:
-        while True:
-            if select.select([sock], [], [], timeout):
-                try:
-                    received = sock.recv(1024)
-                    if not received:  # EOF
-                        return buffer
-                    buffer += received
-                    timeout = 0
-                except socket.error:
-                    return buffer
-            else:               # timeout
-                return buffer
-    finally:
-        if origin_blocking:
-            sock.setblocking(origin_blocking)
-
-
-def sendall(sock, buffer, spin=2) -> bytes:
-    origin_blocking = sock.getblocking()
-    if origin_blocking:
-        sock.setblocking(0)
-    total_sent = 0
-    try:
-        while total_sent < len(buffer):
-            try:
-                total_sent += sock.send(buffer[total_sent:])
-            except socket.error:
-                if spin > 0:
-                    spin -= 1
-                    continue
-                break
-        return buffer[total_sent:]
-    finally:
-        if origin_blocking:
-            sock.setblocking(origin_blocking)
-
-
 def sockinfo(sock):
-    '''Exampble: [id: 0xd829bade, L:/127.0.0.1:2069 - R:/127.0.0.1:55666]'''
+    """Example: [id: 0xd829bade, L:/127.0.0.1:2069 - R:/127.0.0.1:55666]"""
     sock_id = hex(id(sock))
     fileno = sock.fileno()
     s_addr = None

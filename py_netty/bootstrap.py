@@ -2,7 +2,6 @@ import ssl
 import typing
 import socket
 import logging
-from .utils import recvall
 import dataclasses
 from functools import lru_cache
 from .eventloop import EventLoopGroup
