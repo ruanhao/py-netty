@@ -164,9 +164,10 @@ class MyChannelHandler(ChannelHandlerAdapter):
 
 ## Performance Test
 
-![RTT with small packet](https://raw.githubusercontent.com/ruanhao/py-netty/master/rtts_512_32.png)
+This is a rough performance test. Echo server is implemented using py-netty/python socket (blocking mode)/java netty.
+RTT is measured for payload 32B/1024B.
 
-![RTT with large packet](https://raw.githubusercontent.com/ruanhao/py-netty/master/rtts_512_2048.png)
+![RTT with small packet](https://raw.githubusercontent.com/ruanhao/py-netty/master/rtts.png)
 
 
 ## Caveats
