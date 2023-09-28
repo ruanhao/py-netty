@@ -29,7 +29,7 @@ class AbstractChannel:
         self._close_future = ChannelFuture(self)
         self._active = False
         self._handler = None    # lazy initialization
-        self._flag = 0          # intrested events
+        self._flag = 0          # interested events
         self._server_channel = False
         self._ever_active = False
         self._sockinfo = None
@@ -37,6 +37,9 @@ class AbstractChannel:
 
     def channel_future(self) -> 'ChannelFuture':
         return self._channel_future
+
+    def eventloop(self) -> 'EventLoop':
+        return self._eventloop
 
     def id(self):
         return str(hex(id(self.socket())))
@@ -51,10 +54,10 @@ class AbstractChannel:
         return self._socket
 
     def register(self) -> 'ChannelFuture':
-        return self._eventloop.register(self)
+        return self.eventloop().register(self)
 
     def unregister(self) -> 'ChannelFuture':
-        return self._eventloop.unregister(self)
+        return self.eventloop().unregister(self)
 
     def flag(self):
         return self._flag
@@ -65,7 +68,7 @@ class AbstractChannel:
         self._flag |= flag
         logger.debug("add flag %s to channel %s, current flag: %s", flag, self.id(), self._flag)
         try:
-            self._eventloop._epoll.modify(self._fileno, self._flag)
+            self.eventloop().modify_flag(self._fileno, self._flag)
         except Exception:       # maybe fileno is closed
             logger.exception("add flag %s to channel %s failed", flag, self.id())
 
@@ -75,7 +78,7 @@ class AbstractChannel:
         self._flag &= ~flag
         logger.debug("remove flag %s from channel %s, current flag: %s", flag, self.id(), self._flag)
         try:
-            self._eventloop._epoll.modify(self._fileno, self._flag)
+            self.eventloop().modify_flag(self._fileno, self._flag)
         except Exception:       # maybe fileno is closed
             logger.exception("remove flag %s from channel %s failed", flag, self.id())
 
@@ -154,7 +157,7 @@ class AbstractChannel:
             self._eventloop.submit_task(self.close_forcibly)
             return self.close_future()
         logger.debug(f"Closing channel FORCIBLY: {self}")
-        self._eventloop._close_channel_internally(self, 'close channel forcibly')
+        self.eventloop()._close_channel_internally(self, 'close channel forcibly')
         return self.close_future()
 
     def close_gracefully(self) -> 'ChannelFuture':
@@ -167,7 +170,7 @@ class AbstractChannel:
             return self.close_future()
 
         if self.is_server():
-            self._eventloop._close_channel_internally(self, 'close server channel gracefully')
+            self.eventloop()._close_channel_internally(self, 'close server channel gracefully')
         else:                  # client channel
             self.add_pending(Chunk(EMPTY_BUFFER, self.close_future().future, True))
         return self.close_future()

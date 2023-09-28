@@ -49,6 +49,9 @@ class EventLoop:
         self._total_tasks_submitted = 0
         self._total_tasks_processed = 0
 
+    def modify_flag(self, fileno, flag):
+        self._epoll.modify(fileno, flag)
+
     def _get_poll_obj(self):
         try:
             self._linux = True
