@@ -21,7 +21,10 @@ def _client_ssl_context(verify=True):
     if verify:
         return ssl.create_default_context()
     else: # no verify
-        return ssl._create_unverified_context()
+        ssl_context = ssl._create_unverified_context()
+        ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        ssl_context.set_ciphers("ALL")
+        return ssl_context
 
 
 @lru_cache(maxsize=8)
