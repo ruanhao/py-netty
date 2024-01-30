@@ -247,11 +247,17 @@ class NioSocketChannel(AbstractChannel):
         # if isinstance(self.socket(), ssl.SSLSocket):
         #     return self.recvall_ssl()
         buffer = b''
+        bufsize = 1024
         while True:
             try:
-                received = self.socket().recv(1024)
+                received = self.socket().recv(bufsize)
                 if not received:  # EOF
                     return buffer, True
+                recv_len = len(received)
+                if recv_len == bufsize:
+                    bufsize *= 2
+                else:
+                    bufsize = max(1024, bufsize // 2)
                 buffer += received
             # except ssl.SSLWantReadError:  # for ssl socket
             #     logger.debug("recvall ssl.SSLWantReadError, readable: %s", self.is_readable())
