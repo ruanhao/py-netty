@@ -354,7 +354,7 @@ class EventLoop:
 @dataclass
 class EventLoopGroup:
 
-    num: int = None
+    num: int = 1                # 1 is enough for most cases, especially for high IO
     prefix: str = ""
 
     def __post_init__(self):
