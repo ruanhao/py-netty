@@ -255,7 +255,7 @@ class NioSocketChannel(AbstractChannel):
                     return buffer, True
                 recv_len = len(received)
                 if recv_len == bufsize:
-                    bufsize *= 2
+                    bufsize = min(65536, bufsize * 2)
                 else:
                     bufsize = max(1024, bufsize // 2)
                 buffer += received
