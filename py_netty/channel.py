@@ -1,7 +1,6 @@
 import ssl
 import time
 import socket
-import errno
 import select
 import logging
 from functools import wraps
@@ -12,8 +11,9 @@ from .bytebuf import Chunk, EMPTY_BUFFER
 from .handler import LoggingChannelHandler
 from .utils import sockinfo, log, LoggerAdapter
 
-
 logger = LoggerAdapter(logging.getLogger(__name__))
+
+_DEFAULT_BUFFER_SIZE = 1 << 10  # 1KB
 
 
 @dataclass
@@ -126,11 +126,11 @@ class AbstractChannel:
             self._ever_active = True
             if isinstance(self.socket(), ssl.SSLSocket):
                 try:
-                    s = time.time()
+                    s = time.perf_counter()
                     self.socket().do_handshake(True)
-                    cost = round((time.time() - s) * 1000, 2)  # milliseconds
-                    if cost > 1000:
-                        logger.warning("ssl handshake cost: ~%sms", cost)
+                    cost = time.perf_counter() - s # seconds
+                    if cost > 1:
+                        logger.warning("ssl handshake cost: ~%ss", round(cost, 2))
                 except socket.timeout:
                     logger.exception("ssl handshake timeout")
                     self.close(True)
@@ -247,10 +247,16 @@ class NioSocketChannel(AbstractChannel):
         # if isinstance(self.socket(), ssl.SSLSocket):
         #     return self.recvall_ssl()
         buffer = b''
-        bufsize = 1024
+        bufsize = _DEFAULT_BUFFER_SIZE
+        rounds = 0
+        total_costs = 0
         while True:
+            rounds += 1
             try:
+                s = time.perf_counter()
                 received = self.socket().recv(bufsize)
+                cost = time.perf_counter() - s # seconds
+                total_costs += cost
                 if not received:  # EOF
                     return buffer, True
                 recv_len = len(received)
@@ -259,6 +265,12 @@ class NioSocketChannel(AbstractChannel):
                 else:
                     bufsize = max(1024, bufsize // 2)
                 buffer += received
+                if rounds == 512 or total_costs > 0.1 or cost > 0.01:
+                    cost = round(cost, 3)
+                    total_costs = round(total_costs, 3)
+                    sock_info = sockinfo(self.socket())
+                    logger.debug(f"yield from recvall, rounds:{rounds}, current cost:{cost * 1000}ms, total cost:{total_costs * 1000}ms, bufsize:{bufsize}, buffer: {len(buffer)}, socket:{sock_info}")
+                    return buffer, False
             # except ssl.SSLWantReadError:  # for ssl socket
             #     logger.debug("recvall ssl.SSLWantReadError, readable: %s", self.is_readable())
             #     if self.is_readable():
