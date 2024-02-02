@@ -1,3 +1,4 @@
+import os
 import ssl
 import time
 import socket
@@ -13,7 +14,10 @@ from .utils import sockinfo, log, LoggerAdapter
 
 logger = LoggerAdapter(logging.getLogger(__name__))
 
-_DEFAULT_BUFFER_SIZE = 1 << 10  # 1KB
+_DEFAULT_BUFFER_SIZE = int(os.getenv('PY_NETTY_TUNING_BUFFER_SIZE', 1024))
+_ROUNDS = int(os.getenv('PY_NETTY_TUNING_ROUNDS', 8))
+_MAX_BUFFER_SIZE = int(os.getenv('PY_NETTY_TUNING_MAX_BUFFER_SIZE', _DEFAULT_BUFFER_SIZE * _ROUNDS // 2))
+_HIGH_IO_ROUNDS = int(os.getenv('PY_NETTY_TUNING_HIGH_IO_ROUNDS', _ROUNDS // 2))
 
 
 @dataclass
@@ -66,7 +70,8 @@ class AbstractChannel:
         if self._flag & flag:
             return
         self._flag |= flag
-        logger.debug("add flag %s to channel %s, current flag: %s", flag, self.id(), self._flag)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("add flag %s to channel %s, current flag: %s", flag, self.id(), self._flag)
         try:
             self.eventloop().modify_flag(self._fileno, self._flag)
         except Exception:       # maybe fileno is closed
@@ -76,7 +81,8 @@ class AbstractChannel:
         if not self._flag & flag:
             return
         self._flag &= ~flag
-        logger.debug("remove flag %s from channel %s, current flag: %s", flag, self.id(), self._flag)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("remove flag %s from channel %s, current flag: %s", flag, self.id(), self._flag)
         try:
             self.eventloop().modify_flag(self._fileno, self._flag)
         except Exception:       # maybe fileno is closed
@@ -236,7 +242,8 @@ class NioSocketChannel(AbstractChannel):
             try:
                 total_sent += self.socket().send(bytebuf[total_sent:])
             except socket.error as socket_err:
-                logger.debug("try_send socket.error: %s, spin: %s", str(socket_err), spin)
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("try_send socket.error: %s, spin: %s", str(socket_err), spin)
                 if spin > 0:
                     spin -= 1
                     continue
@@ -250,6 +257,7 @@ class NioSocketChannel(AbstractChannel):
         bufsize = _DEFAULT_BUFFER_SIZE
         rounds = 0
         total_costs = 0
+        high_io_rounds = _HIGH_IO_ROUNDS
         while True:
             rounds += 1
             try:
@@ -260,16 +268,21 @@ class NioSocketChannel(AbstractChannel):
                 if not received:  # EOF
                     return buffer, True
                 recv_len = len(received)
-                if recv_len == bufsize:
-                    bufsize = min(65536, bufsize * 2)
+                if bufsize == _MAX_BUFFER_SIZE and high_io_rounds > 0:
+                    high_io_rounds -= 1
                 else:
-                    bufsize = max(1024, bufsize // 2)
+                    high_io_rounds = _HIGH_IO_ROUNDS
+                    if recv_len == bufsize:
+                        bufsize = min(_MAX_BUFFER_SIZE, bufsize * 2)
+                    else:
+                        bufsize = max(_DEFAULT_BUFFER_SIZE, bufsize // 2)
                 buffer += received
-                if rounds == 512 or total_costs > 0.1 or cost > 0.01:
-                    cost = round(cost, 3)
-                    total_costs = round(total_costs, 3)
-                    sock_info = sockinfo(self.socket())
-                    logger.debug(f"yield from recvall, rounds:{rounds}, current cost:{cost * 1000}ms, total cost:{total_costs * 1000}ms, bufsize:{bufsize}, buffer: {len(buffer)}, socket:{sock_info}")
+                if rounds == _ROUNDS or total_costs > 0.1 or cost > 0.01:
+                    if logger.isEnabledFor(logging.DEBUG):
+                        cost = round(cost, 3)
+                        total_costs = round(total_costs, 3)
+                        sock_info = sockinfo(self.socket())
+                        logger.debug(f"yield from recvall, rounds:{rounds}, current cost:{cost * 1000}ms, total cost:{total_costs * 1000}ms, bufsize:{bufsize}, buffer: {len(buffer)}, socket:{sock_info}")
                     return buffer, False
             # except ssl.SSLWantReadError:  # for ssl socket
             #     logger.debug("recvall ssl.SSLWantReadError, readable: %s", self.is_readable())
@@ -277,7 +290,8 @@ class NioSocketChannel(AbstractChannel):
             #         continue
             #     return buffer, False
             except socket.error as socket_err:
-                logger.debug("recvall socket.error: %s, readable: %s", str(socket_err), self.is_readable())
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("recvall socket.error: %s, readable: %s", str(socket_err), self.is_readable())
                 if self.is_readable():
                     continue
                 return buffer, False

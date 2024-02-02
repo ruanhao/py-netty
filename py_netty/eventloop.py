@@ -67,7 +67,7 @@ class EventLoop:
         self.interrupt("submit task")
 
     def interrupt(self, desc=""):
-        if desc:
+        if desc and logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"interrupting eventloop with EventFD {hex(id(self._eventfd))} in {self._thread.name}: {desc}")
         self._eventfd.unsafe_write()
 
@@ -85,7 +85,8 @@ class EventLoop:
         fileno = channel.fileno0()
         try:
             self._epoll.unregister(fileno)
-            logger.debug("unregistered fd %s from epoll", fileno)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("unregistered fd %s from epoll", fileno)
             channel.handler_context().fire_channel_unregistered()
         except Exception:
             pass
@@ -118,7 +119,8 @@ class EventLoop:
         channel.set_flag(flag)
         self._epoll.register(channel, flag)
         channel.handler_context().fire_channel_registered()
-        logger.debug("registered fd %s to poll with flag: %s (%s)", channel.fileno(), flag, self._flag_to_str(flag))
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("registered fd %s to poll with flag: %s (%s)", channel.fileno(), flag, self._flag_to_str(flag))
         self._total_registered += 1
         self._channels[channel.fileno()] = channel
         if not channel.is_server():
@@ -135,13 +137,15 @@ class EventLoop:
     def _process_task_queue(self):
         while not self._taskq.empty():
             task = self._taskq.get()
-            logger.debug("task to run: %s", task)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("task to run: %s", task)
             try:
                 start = time.time()
                 task()
             except Exception:
                 logger.exception("error when running task: %s", task)
-            logger.debug("task finished in %sms: %s", int((time.time() - start) * 1000), task)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("task finished in %sms: %s", int((time.time() - start) * 1000), task)
             self._total_tasks_processed += 1
 
     def _close_channel_internally(self, channel, reason=''):
@@ -227,16 +231,17 @@ class EventLoop:
     def _poll(self) -> List[Tuple[int, int]]:
         timeout = self._poll_timeout()
 
-        if timeout < 0:
-            logger.debug("poll timeout: %s", timeout)
-        else:
-            logger.debug("poll timeout: %s%s", timeout, 's' if self._linux else 'ms')
+        if logger.isEnabledFor(logging.DEBUG):
+            if timeout < 0:
+                logger.debug("poll timeout: %s", timeout)
+            else:
+                logger.debug("poll timeout: %s%s", timeout, 's' if self._linux else 'ms')
 
         events = self._epoll.poll(timeout)
         if not events and logger.isEnabledFor(logging.DEBUG):  # poll is interrupted by timeout
             self._show_debug_info()
             pass
-        if events:
+        if events and logger.isEnabledFor(logging.DEBUG):
             logger.debug("events polled: %s", self._events_to_str(events))
         return events
 
@@ -277,7 +282,8 @@ class EventLoop:
 
             for fileno, event in self._poll():
                 if fileno == self._eventfd.fileno():  # just to wake up from epoll
-                    logger.debug("EventFD %s interrupted", hex(id(self._eventfd)))
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug("EventFD %s interrupted", hex(id(self._eventfd)))
                     self._eventfd.unsafe_read()
                     self._eventfd_read_count += 1
                     continue
