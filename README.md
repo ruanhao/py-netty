@@ -203,6 +203,9 @@ Test is performed using echo client/server mechanism on a 1-Core 2.0GHz Intel(R)
 ![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/256_concurrent_8M_average.png)
 ![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/256_concurrent_8M_rampup.png)
 
+### CPU Usage
+![32K/s](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/cpu_usage_32k.png)
+![2M/s](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/cpu_usage_2m.png)
 
 ## Caveats
 
