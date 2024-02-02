@@ -14,10 +14,19 @@ from .utils import sockinfo, log, LoggerAdapter
 
 logger = LoggerAdapter(logging.getLogger(__name__))
 
-_DEFAULT_BUFFER_SIZE = int(os.getenv('PY_NETTY_TUNING_BUFFER_SIZE', 1024))
-_ROUNDS = int(os.getenv('PY_NETTY_TUNING_ROUNDS', 8))
-_MAX_BUFFER_SIZE = int(os.getenv('PY_NETTY_TUNING_MAX_BUFFER_SIZE', _DEFAULT_BUFFER_SIZE * _ROUNDS // 2))
-_HIGH_IO_ROUNDS = int(os.getenv('PY_NETTY_TUNING_HIGH_IO_ROUNDS', _ROUNDS // 2))
+_ROUNDS = int(os.getenv('PY_NETTY_TUNING_ROUNDS', 16))
+_INITIAL_BUFFER_SIZE = int(os.getenv('PY_NETTY_TUNING_INIT_BUFFER_SIZE', 1024))
+_MIN_BUFFER_SIZE = int(os.getenv('PY_NETTY_TUNING_MIN_BUFFER_SIZE', _INITIAL_BUFFER_SIZE >> 1))
+_MAX_BUFFER_SIZE = int(os.getenv('PY_NETTY_TUNING_MAX_BUFFER_SIZE', _INITIAL_BUFFER_SIZE << 4))
+
+
+def adaptive_bufsize(previous_bufsize, data_size):
+    if data_size < (previous_bufsize >> 1) and previous_bufsize > _MIN_BUFFER_SIZE:
+        return max(previous_bufsize >> 1, _MIN_BUFFER_SIZE)
+    elif data_size == previous_bufsize and previous_bufsize < _MAX_BUFFER_SIZE:
+        return min(previous_bufsize << 1, _MAX_BUFFER_SIZE)
+    else:
+        return previous_bufsize
 
 
 @dataclass
@@ -134,7 +143,7 @@ class AbstractChannel:
                 try:
                     s = time.perf_counter()
                     self.socket().do_handshake(True)
-                    cost = time.perf_counter() - s # seconds
+                    cost = time.perf_counter() - s  # seconds
                     if cost > 1:
                         logger.warning("ssl handshake cost: ~%ss", round(cost, 2))
                 except socket.timeout:
@@ -254,28 +263,20 @@ class NioSocketChannel(AbstractChannel):
         # if isinstance(self.socket(), ssl.SSLSocket):
         #     return self.recvall_ssl()
         buffer = b''
-        bufsize = _DEFAULT_BUFFER_SIZE
+        bufsize = _INITIAL_BUFFER_SIZE
         rounds = 0
         total_costs = 0
-        high_io_rounds = _HIGH_IO_ROUNDS
         while True:
             rounds += 1
             try:
                 s = time.perf_counter()
                 received = self.socket().recv(bufsize)
-                cost = time.perf_counter() - s # seconds
+                cost = time.perf_counter() - s  # seconds
                 total_costs += cost
                 if not received:  # EOF
                     return buffer, True
                 recv_len = len(received)
-                if bufsize == _MAX_BUFFER_SIZE and high_io_rounds > 0:
-                    high_io_rounds -= 1
-                else:
-                    high_io_rounds = _HIGH_IO_ROUNDS
-                    if recv_len == bufsize:
-                        bufsize = min(_MAX_BUFFER_SIZE, bufsize * 2)
-                    else:
-                        bufsize = max(_DEFAULT_BUFFER_SIZE, bufsize // 2)
+                bufsize = adaptive_bufsize(bufsize, recv_len)
                 buffer += received
                 if rounds == _ROUNDS or total_costs > 0.1 or cost > 0.01:
                     if logger.isEnabledFor(logging.DEBUG):

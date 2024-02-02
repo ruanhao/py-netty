@@ -162,19 +162,19 @@ class MyChannelHandler(ChannelHandlerAdapter):
 ```
 
 
-## Performance Test
+## Benchmark
 
-Test is performed using echo client/server mechanism on a 1-core 2.4GHz Intel Core i5 with 4GB memory, Ubuntu 22.04.
-(Please see `echo_server.py` for details.)
+Test is performed using echo client/server mechanism on a 1-Core 2.0GHz Intel(R) Xeon(R) Platinum 8452Y with 4GB memory, Ubuntu 22.04.
+(Please see `bm_echo_server.py` for details.)
 
 3 methods are tested: 
 1. BIO (Traditional thread based blocking IO)
 2. Asyncio (Python built-in async IO)
-2) NIO (py-netty with 1 eventloop)
+3. NIO (py-netty with 1 eventloop)
 
 3 metrics are collected:
 1. Throughput (of each connection) to indicate overall stability
-2. Average speed (of all connections) to indicate overall performance
+2. Average throughput (of all connections) to indicate overall performance
 3. Ramp up time (seconds consumed after all connections established) to indicate responsiveness
 
 ### Case 1: Concurrent 64 connections with 32K/s 
@@ -192,6 +192,16 @@ Test is performed using echo client/server mechanism on a 1-core 2.4GHz Intel Co
 ![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_4M_average.png)
 ![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_4M_rampup.png)
 
+### Case 4: Concurrent 128 connections with 8M/s 
+![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_8M_throuput.png)
+![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_8M_average.png)
+![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_8M_rampup.png)
+
+
+### Case 5: Concurrent 256 connections with 8M/s 
+![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/256_concurrent_8M_throuput.png)
+![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/256_concurrent_8M_average.png)
+![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/256_concurrent_8M_rampup.png)
 
 
 ## Caveats
