@@ -165,6 +165,7 @@ class MyChannelHandler(ChannelHandlerAdapter):
 ## Performance Test
 
 Test is performed using echo client/server mechanism on a 1-core 2.4GHz Intel Core i5 with 4GB memory, Ubuntu 22.04.
+(Please see `echo_server.py` for details.)
 
 3 methods are tested: 
 1. BIO (Traditional thread based blocking IO)
