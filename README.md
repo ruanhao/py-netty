@@ -164,11 +164,33 @@ class MyChannelHandler(ChannelHandlerAdapter):
 
 ## Performance Test
 
+Test is performed using echo client/server mechanism on a 1-core 2.4GHz Intel Core i5 with 4GB memory, Ubuntu 22.04.
 
-This is a rough performance test. Echo server is implemented using py-netty/python socket (blocking mode)/java netty.
-RTT is measured for payload 32B/1024B.
+3 methods are tested: 
+1. BIO (Traditional thread based blocking IO)
+2. Asyncio (Python built-in async IO)
+2) NIO (py-netty with 1 eventloop)
 
-![RTT with small packet](https://raw.githubusercontent.com/ruanhao/py-netty/master/rtts.png)
+3 metrics are collected:
+1. Throughput (of each connection) to indicate overall stability
+2. Average speed (of all connections) to indicate overall performance
+3. Ramp up time (seconds consumed after all connections established) to indicate responsiveness
+
+### Case 1: Concurrent 64 connections with 32K/s 
+![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_32K_throuput.png)
+![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_32K_average.png)
+![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_32K_rampup.png)
+
+### Case 2: Concurrent 64 connections with 4M/s 
+![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_4M_throuput.png)
+![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_4M_average.png)
+![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_4M_rampup.png)
+
+### Case 3: Concurrent 128 connections with 4M/s 
+![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_4M_throuput.png)
+![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_4M_average.png)
+![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_4M_rampup.png)
+
 
 
 ## Caveats
