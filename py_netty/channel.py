@@ -2,7 +2,6 @@ import os
 import ssl
 import time
 import socket
-import select
 import logging
 from functools import wraps
 from concurrent.futures import Future
@@ -10,7 +9,8 @@ from typing import Callable, List, Union
 from dataclasses import dataclass, field
 from .bytebuf import Chunk, EMPTY_BUFFER
 from .handler import LoggingChannelHandler
-from .utils import sockinfo, log, LoggerAdapter
+from .utils import sockinfo, log, LoggerAdapter, flag_to_str
+import selectors
 
 logger = LoggerAdapter(logging.getLogger(__name__))
 
@@ -80,22 +80,24 @@ class AbstractChannel:
             return
         self._flag |= flag
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug("add flag %s to channel %s, current flag: %s", flag, self.id(), self._flag)
+            logger.debug("add flag %s(%s) to channel %s/%s, current flag: %s(%s)",
+                         flag, flag_to_str(flag), self.id(), self._fileno, self._flag, flag_to_str(self._flag))
         try:
             self.eventloop().modify_flag(self._fileno, self._flag)
         except Exception:       # maybe fileno is closed
-            logger.exception("add flag %s to channel %s failed", flag, self.id())
+            logger.exception("add flag %s(%s) to channel %s/%s failed", flag, flag_to_str(flag), self.id(), self._fileno)
 
     def remove_flag(self, flag):
         if not self._flag & flag:
             return
         self._flag &= ~flag
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug("remove flag %s from channel %s, current flag: %s", flag, self.id(), self._flag)
+            logger.debug("remove flag %s(%s) from channel %s/%s, current flag: %s(%s)",
+                         flag, flag_to_str(flag), self.id(), self._fileno, self._flag, flag_to_str(self._flag))
         try:
             self.eventloop().modify_flag(self._fileno, self._flag)
         except Exception:       # maybe fileno is closed
-            logger.exception("remove flag %s from channel %s failed", flag, self.id())
+            logger.exception("remove flag %s(%s) from channel %s failed", flag, flag_to_str(flag), self.id())
 
     def handler(self):
         if self._handler is None:
@@ -222,7 +224,7 @@ class NioSocketChannel(AbstractChannel):
 
     def set_pendings(self, pendings: List['Chunk']):
         self._pendings = pendings
-        self.add_flag(select.POLLOUT)
+        self.add_flag(selectors.EVENT_WRITE)
 
     def add_pending(self, chunk: 'Chunk'):
         if chunk is None:
@@ -230,7 +232,7 @@ class NioSocketChannel(AbstractChannel):
         if chunk.close is False and not chunk.buffer:
             return
         self._pendings.append(chunk)
-        self.add_flag(select.POLLOUT)
+        self.add_flag(selectors.EVENT_WRITE)
 
     def has_pendings(self) -> bool:
         return len(self._pendings) > 0

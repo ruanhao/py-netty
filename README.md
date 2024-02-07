@@ -1,13 +1,19 @@
 # py-netty :rocket:
 
-An epoll-based event-driven TCP networking framework.
+An event-driven TCP networking framework.
 
 Ideas and concepts under the hood are build upon those of [Netty](https://netty.io/), especially the IO and executor model.
 
 APIs are intuitive to use if you are a Netty alcoholic.
 
 
+# Features
 
+- callback based application invocation
+- non blocking IO
+- recv/write is performed only in IO thread
+- adaptive read buffer
+- all platform supported (linux: epoll, mac: kqueue, windows: select)
 
 ## Installation
 
@@ -114,10 +120,10 @@ class ProxyChannelHandler(ChannelHandlerAdapter):
 
 
 proxied_server, proxied_port = 'www.google.com', 443
-client_eventloop_group = EventLoopGroup(2, 'ClientEventloopGroup')
+client_eventloop_group = EventLoopGroup(1, 'ClientEventloopGroup')
 sb = ServerBootstrap(
     parant_group=EventLoopGroup(1, 'Acceptor'),
-    child_group=EventLoopGroup(2, 'Worker'),
+    child_group=EventLoopGroup(1, 'Worker'),
     child_handler_initializer=lambda: ProxyChannelHandler(proxied_server, proxied_port, client_eventloop_group)
 )
 sb.bind(port=8443).close_future().sync()

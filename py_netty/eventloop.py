@@ -1,20 +1,21 @@
 import queue
 import time
 import itertools
-import select
+import selectors
 import logging
 import threading
 from .eventfd import eventfd
 from concurrent.futures import ThreadPoolExecutor
-from .utils import create_thread_pool, sockinfo, log, LoggerAdapter
+from .utils import create_thread_pool, sockinfo, log, LoggerAdapter, flag_to_str
 from .channel import ChannelFuture, AbstractChannel
 from dataclasses import dataclass
 from typing import List, Tuple
-
+import os
+import inspect
 
 logger = LoggerAdapter(logging.getLogger(__name__))
 
-DEBUG_INTERVAL_MILLIS = 10000
+DEBUG_INTERVAL_MILLIS = int(os.getenv('PY_NETTY_DEBUG_INTERVAL_MILLIS', 60000))
 
 
 class EventLoop:
@@ -31,10 +32,11 @@ class EventLoop:
         self._lock = threading.Lock()
         self._pool = pool
 
-        # poll object
+        # create selector
         self._eventfd = eventfd()
-        self._epoll = self._get_poll_obj()
-        self._epoll.register(self._eventfd, select.POLLIN)
+        self._selector = selectors.DefaultSelector()
+        self._selector.register(self._eventfd, selectors.EVENT_READ)
+        logger.debug("selector(%s) created for pool [%s]", type(self._selector).__name__, self._pool._thread_name_prefix)
 
         # queues
         self._taskq = queue.Queue()
@@ -50,15 +52,7 @@ class EventLoop:
         self._total_tasks_processed = 0
 
     def modify_flag(self, fileno, flag):
-        self._epoll.modify(fileno, flag)
-
-    def _get_poll_obj(self):
-        try:
-            self._linux = True
-            return select.epoll()
-        except Exception:
-            self._linux = False
-            return select.poll()
+        self._selector.modify(fileno, flag)
 
     def submit_task(self, task):
         self.start()
@@ -84,9 +78,9 @@ class EventLoop:
             return cf
         fileno = channel.fileno0()
         try:
-            self._epoll.unregister(fileno)
+            self._selector.unregister(fileno)
             if logger.isEnabledFor(logging.DEBUG):
-                logger.debug("unregistered fd %s from epoll", fileno)
+                logger.debug("unregistered channel %s/%s from selector", channel.id(), fileno)
             channel.handler_context().fire_channel_unregistered()
         except Exception:
             pass
@@ -98,9 +92,6 @@ class EventLoop:
     def in_eventloop(self):
         return self._thread == threading.current_thread()
 
-    def _flag_to_str(self, flag):
-        return "|".join([k for k, v in select.__dict__.items() if k.startswith("POLL") and v & flag])
-
     def register(self, channel: AbstractChannel) -> ChannelFuture:
         self.start()
 
@@ -110,17 +101,13 @@ class EventLoop:
 
         channel.socket().setblocking(False)
 
-        flag = select.POLLIN | select.POLLHUP | select.POLLOUT
-        # not sure if this is a bug, but on linux, if I register a server socket with EPOLLET,
-        # when there is a flood of connections, epoll will not trigger POLLIN event for the server socket to accept,
-        # even if there are connections waiting to be accepted.
-        # if self._linux and not is_server:
-        #     flag |= select.EPOLLET
+        flag = selectors.EVENT_READ | selectors.EVENT_WRITE
         channel.set_flag(flag)
-        self._epoll.register(channel, flag)
+        self._selector.register(channel, flag)
         channel.handler_context().fire_channel_registered()
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug("registered fd %s to poll with flag: %s (%s)", channel.fileno(), flag, self._flag_to_str(flag))
+            logger.debug("registered channel(server:%s) [%s/%s] with flag: %s(%s)",
+                         channel.is_server(), channel.id(), channel.fileno(), flag, flag_to_str(flag))
         self._total_registered += 1
         self._channels[channel.fileno()] = channel
         if not channel.is_server():
@@ -130,22 +117,22 @@ class EventLoop:
         return channel.channel_future()
 
     def stop(self):
-        logger.debug("stopping epoll")
+        logger.debug("stopping poll")
         self._stop_polling = True
-        self.interrupt('stop epoll')
+        self.interrupt('stop poll')
 
     def _process_task_queue(self):
         while not self._taskq.empty():
             task = self._taskq.get()
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("task to run: %s", task)
+            start = time.time()
             try:
-                start = time.time()
                 task()
             except Exception:
-                logger.exception("error when running task: %s", task)
+                logger.exception("error when running task: \n%s", inspect.getsource(task))
             if logger.isEnabledFor(logging.DEBUG):
-                logger.debug("task finished in %sms: %s", int((time.time() - start) * 1000), task)
+                logger.debug("task finished in %sms: \n%s", int((time.time() - start) * 1000), inspect.getsource(task))
             self._total_tasks_processed += 1
 
     def _close_channel_internally(self, channel, reason=''):
@@ -156,19 +143,20 @@ class EventLoop:
         channel.set_active(False, reason)
         channel.unregister()
 
-    def _events_to_str(self, events):
+    def _events_to_str(self, events: List[Tuple[selectors.SelectorKey, int]]):
         result = []
-        for fileno, flag in events:
+        for key, flag in events:
+            fileno = key.fd
             if fileno == self._eventfd.fileno():
-                fdname = f"EventFD({hex(id(self._eventfd))})"
+                fd_name = f"EventFD({hex(id(self._eventfd))})"
             else:
                 channel = self._channels.get(fileno)
                 if not channel:
-                    fdname = f"unknown({fileno})"
+                    fd_name = f"unknown({fileno})"
                 else:
-                    fdname = "%s(%s/%s)" % ('server' if channel.is_server() else 'client', fileno, channel.id())
-            flags_str = self._flag_to_str(flag)
-            result.append(f"{fdname}:{flags_str}")
+                    fd_name = "%s(%s/%s)" % ('server' if channel.is_server() else 'client', fileno, channel.id())
+            flags_str = flag_to_str(flag)
+            result.append(f"{fd_name}:{flags_str}")
         return ", ".join(result)
 
     def _show_debug_info(self, n=50):
@@ -202,7 +190,7 @@ class EventLoop:
             bytes_count = 0
             for chunk in channel.pendings():
                 chunk_count += 1
-                bytes_count += len(chunk)
+                bytes_count += len(chunk.buffer)
             logger.debug(f"{channel_id}: {chunk_count} chunks, {bytes_count} bytes in total")
 
     def _millis_to_wait_for_connect_timeout(self) -> int:  # in milliseconds
@@ -222,30 +210,26 @@ class EventLoop:
             timeout_millis = millis_to_wait_for_connect_timeout
 
         if timeout_millis < 0:
-            return -1
-        elif self._linux:
-            return max(1, int(timeout_millis / 1000))
-        else:
-            return timeout_millis
+            return None
+        return max(1, int(timeout_millis / 1000))
 
-    def _poll(self) -> List[Tuple[int, int]]:
+    def _poll(self) -> List[Tuple[selectors.SelectorKey, int]]:
         timeout = self._poll_timeout()
 
         if logger.isEnabledFor(logging.DEBUG):
-            if timeout < 0:
-                logger.debug("poll timeout: %s", timeout)
+            if timeout is None:
+                logger.debug("poll timeout: infinity")
             else:
-                logger.debug("poll timeout: %s%s", timeout, 's' if self._linux else 'ms')
+                logger.debug("poll timeout: %ss", timeout)
 
-        events = self._epoll.poll(timeout)
+        events = self._selector.select(timeout)
         if not events and logger.isEnabledFor(logging.DEBUG):  # poll is interrupted by timeout
             self._show_debug_info()
-            pass
         if events and logger.isEnabledFor(logging.DEBUG):
             logger.debug("events polled: %s", self._events_to_str(events))
         return events
 
-    def _process_connection_timout(self):
+    def _process_connection_timeout(self):
         if not self._connect_timeout_due_millis:
             return
         current = int(time.time() * 1000)
@@ -276,11 +260,12 @@ class EventLoop:
         logger.debug(f"eventloop (EventFD:{hex(id(self._eventfd))}) started in thread: {self._thread.name}")
         while True:
             if self._stop_polling:
-                self._epoll.close()
+                self._selector.close()
                 logger.debug(f"eventloop (EventFD:{hex(id(self._eventfd))}) closed in thread: {self._thread.name}")
                 return
 
-            for fileno, event in self._poll():
+            for key, event in self._poll():
+                fileno = key.fd
                 if fileno == self._eventfd.fileno():  # just to wake up from epoll
                     if logger.isEnabledFor(logging.DEBUG):
                         logger.debug("EventFD %s interrupted", hex(id(self._eventfd)))
@@ -303,10 +288,10 @@ class EventLoop:
                         server_channel.handler_context().fire_channel_read(client_sock)
                     continue
 
-                if event & select.POLLOUT:
+                if event & selectors.EVENT_WRITE:
                     self._check_channel_active(channel)
-                    if not channel.has_pendings():  # no pending chunks
-                        channel.remove_flag(select.POLLOUT)
+                    if not channel.has_pendings():  # has no pending chunks
+                        channel.remove_flag(selectors.EVENT_WRITE)
                     else:
                         chunks = channel.pendings()
                         while True:
@@ -327,9 +312,9 @@ class EventLoop:
                                 break
                         channel.set_pendings(chunks)
                         if not channel.has_pendings():
-                            channel.remove_flag(select.POLLOUT)
+                            channel.remove_flag(selectors.EVENT_WRITE)
 
-                if event & select.POLLIN and fileno in self._channels:
+                if event & selectors.EVENT_READ and fileno in self._channels:
                     buffer, eof = channel.recvall()
                     self._total_received += len(buffer)
                     if buffer:
@@ -340,12 +325,8 @@ class EventLoop:
                         self._close_channel_internally(channel, 'EOF')
                         continue
 
-                if event & select.POLLHUP:
-                    if not event & select.POLLIN:
-                        self._close_channel_internally(channel, 'HUP')
-
             self._process_task_queue()
-            self._process_connection_timout()
+            self._process_connection_timeout()
 
     def start(self):
         if self._start_barrier.is_set():

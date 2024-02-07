@@ -1,12 +1,10 @@
 import sys
-import select
-import socket
 import logging
 import itertools
 import traceback
 from functools import wraps
 from concurrent import futures
-
+import selectors
 
 _counter = itertools.count()
 
@@ -58,3 +56,12 @@ class LoggerAdapter(logging.LoggerAdapter):
             return '[%s] %s' % (self.prefix, msg), kwargs
         else:
             return msg, kwargs
+
+
+def flag_to_str(flag):
+    flags = []
+    if flag & selectors.EVENT_READ:
+        flags.append("R")
+    if flag & selectors.EVENT_WRITE:
+        flags.append("W")
+    return "|".join(flags)
