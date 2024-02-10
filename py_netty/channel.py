@@ -369,8 +369,8 @@ class ChannelHandlerContext:
     def close(self):
         self._channel.close()
 
-    def write(self, bytebuf):
-        self._channel.write(bytebuf)
+    def write(self, bytebuf) -> 'ChannelFuture':
+        return self._channel.write(bytebuf)
 
     def channel(self):
         return self._channel
