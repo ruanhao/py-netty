@@ -275,7 +275,7 @@ class EventLoop:
 
                 channel = self._channels.get(fileno)
                 if not channel:
-                    logger.error("channel not found by fileno: %s", fileno)
+                    logger.debug("channel not found by fileno: %s", fileno)
                     continue
 
                 if channel.is_server():

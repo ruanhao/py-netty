@@ -84,6 +84,8 @@ class AbstractChannel:
                          flag, flag_to_str(flag), self.id(), self._fileno, self._flag, flag_to_str(self._flag))
         try:
             self.eventloop().modify_flag(self._fileno, self._flag)
+        except KeyError:
+            pass
         except Exception:       # maybe fileno is closed
             logger.exception("add flag %s(%s) to channel %s/%s failed", flag, flag_to_str(flag), self.id(), self._fileno)
 
