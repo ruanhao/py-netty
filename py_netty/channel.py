@@ -5,12 +5,13 @@ import socket
 import logging
 from functools import wraps
 from concurrent.futures import Future
-from typing import Callable, List, Union
+from typing import Callable, List, Union, Tuple, Optional
 from dataclasses import dataclass, field
 from .bytebuf import Chunk, EMPTY_BUFFER
 from .handler import LoggingChannelHandler
 from .utils import sockinfo, log, LoggerAdapter, flag_to_str
 import selectors
+from attrs import define, field as _field
 
 logger = LoggerAdapter(logging.getLogger(__name__))
 
@@ -18,6 +19,26 @@ _ROUNDS = int(os.getenv('PY_NETTY_TUNING_ROUNDS', 16))
 _INITIAL_BUFFER_SIZE = int(os.getenv('PY_NETTY_TUNING_INIT_BUFFER_SIZE', 1024))
 _MIN_BUFFER_SIZE = int(os.getenv('PY_NETTY_TUNING_MIN_BUFFER_SIZE', _INITIAL_BUFFER_SIZE >> 1))
 _MAX_BUFFER_SIZE = int(os.getenv('PY_NETTY_TUNING_MAX_BUFFER_SIZE', _INITIAL_BUFFER_SIZE << 4))
+
+
+@define(slots=True, kw_only=True, order=True)
+class ChannelInfo:
+
+    sock: socket.socket = _field()
+    id: str = _field()
+    sockname: Tuple[str, int] = _field()
+    peername: Tuple[str, int] = _field()
+    fileno: int = _field(default=-1)
+
+    @classmethod
+    def of(cls, sock: socket.socket):
+        return cls(
+            sock=sock,
+            id=hex(id(sock)),
+            sockname=sock.getsockname()[:2],
+            peername=sock.getpeername()[:2],
+            fileno=sock.fileno()
+        )
 
 
 def adaptive_bufsize(previous_bufsize, data_size):
@@ -46,6 +67,7 @@ class AbstractChannel:
         self._server_channel = False
         self._ever_active = False
         self._sockinfo = None
+        self._channelinfo = None
         self._channel_future = ChannelFuture(self)
 
     def channel_future(self) -> 'ChannelFuture':
@@ -65,6 +87,10 @@ class AbstractChannel:
 
     def socket(self) -> socket.socket:
         return self._socket
+
+    def channelinfo(self) -> Optional[ChannelInfo]:
+        """Include ORIGINAL socket info, even if the sock is closed."""
+        return self._channelinfo
 
     def register(self) -> 'ChannelFuture':
         return self.eventloop().register(self)
@@ -130,6 +156,7 @@ class AbstractChannel:
 
     def _refresh_sock_info(self) -> str:
         self._sockinfo = None
+        self._channelinfo = None
         return str(self)
 
     @log(logger)
@@ -141,8 +168,8 @@ class AbstractChannel:
         if origin is True and active is False:
             self.handler_context().fire_channel_inactive()
         if origin is False and active is True:
-            self._refresh_sock_info()
             self._ever_active = True
+            self._refresh_sock_info()
             if isinstance(self.socket(), ssl.SSLSocket):
                 try:
                     s = time.perf_counter()
@@ -200,6 +227,21 @@ class AbstractChannel:
     def __str__(self):
         if not self._sockinfo:
             self._sockinfo = sockinfo(self._socket)
+        if not self._channelinfo:
+            try:
+                self._channelinfo = ChannelInfo.of(self._socket)
+            except Exception:
+                pass
+        if self._channelinfo:
+            ci = self._channelinfo
+            l_addr = ':'.join(map(str, ci.sockname))
+            r_addr = ':'.join(map(str, ci.peername))
+            sign = '-'
+            if not self._ever_active:
+                sign = '?'
+            elif not self.is_active():
+                sign = '!'
+            return f"[id:{ci.id}, fd:{ci.fileno}, L:/{l_addr} {sign} R:/{r_addr}]"
         if not self._ever_active:
             return self._sockinfo.replace('-', '?')
         if not self.is_active():
