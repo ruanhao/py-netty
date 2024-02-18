@@ -20,7 +20,7 @@ config = {
     'keywords': ['network', 'tcp', 'non-blocking', 'epoll', 'nio', 'netty'],
     'version': version,
     'packages': find_packages(),
-    'install_requires': [],
+    'install_requires': ['attrs'],
     'python_requires': ">=3.7, <4",
     'setup_requires': ['wheel'],
     'classifiers': [

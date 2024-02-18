@@ -1,17 +1,17 @@
-from dataclasses import dataclass
+from attrs import define, field
 from concurrent.futures import Future
 
 EMPTY_BUFFER = b''
 
 
-@dataclass
+@define(slots=True)
 class Chunk:
 
-    buffer: bytes
-    future: Future = None
-    close: bool = False
+    buffer: bytes = field()
+    future: Future = field(default=None)
+    close: bool = field(default=False)
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         self.future = self.future or Future()
 
     def __str__(self):

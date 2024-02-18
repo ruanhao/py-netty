@@ -8,10 +8,10 @@ from .eventfd import eventfd
 from concurrent.futures import ThreadPoolExecutor
 from .utils import create_thread_pool, sockinfo, log, LoggerAdapter, flag_to_str
 from .channel import ChannelFuture, AbstractChannel
-from dataclasses import dataclass
 from typing import List, Tuple
 import os
 import inspect
+from attrs import define, field
 
 logger = LoggerAdapter(logging.getLogger(__name__))
 
@@ -338,13 +338,13 @@ class EventLoop:
             self._start_barrier.wait()
 
 
-@dataclass
+@define(slots=False)
 class EventLoopGroup:
 
-    num: int = 1                # 1 is enough for most cases, especially for high IO
-    prefix: str = ""
+    num: int = field(default=1)                # 1 is enough for most cases, especially for high IO
+    prefix: str = field(default="")  # prefix for eventloop name
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         self.pool = create_thread_pool(self.num, self.prefix)
         self.eventloops = [EventLoop(self.pool) for _ in range(self.pool._max_workers)]
         self._iter = itertools.cycle(self.eventloops)

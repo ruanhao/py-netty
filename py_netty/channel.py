@@ -6,12 +6,11 @@ import logging
 from functools import wraps
 from concurrent.futures import Future
 from typing import Callable, List, Union, Tuple, Optional
-from dataclasses import dataclass, field
 from .bytebuf import Chunk, EMPTY_BUFFER
 from .handler import LoggingChannelHandler
 from .utils import sockinfo, log, LoggerAdapter, flag_to_str
 import selectors
-from attrs import define, field as _field
+from attrs import define, field
 
 logger = LoggerAdapter(logging.getLogger(__name__))
 
@@ -21,14 +20,14 @@ _MIN_BUFFER_SIZE = int(os.getenv('PY_NETTY_TUNING_MIN_BUFFER_SIZE', _INITIAL_BUF
 _MAX_BUFFER_SIZE = int(os.getenv('PY_NETTY_TUNING_MAX_BUFFER_SIZE', _INITIAL_BUFFER_SIZE << 4))
 
 
-@define(slots=True, kw_only=True, order=True)
+@define(slots=True, kw_only=True)
 class ChannelInfo:
 
-    sock: socket.socket = _field()
-    id: str = _field()
-    sockname: Tuple[str, int] = _field()
-    peername: Tuple[str, int] = _field()
-    fileno: int = _field(default=-1)
+    sock: socket.socket = field()
+    id: str = field()
+    sockname: Tuple[str, int] = field()
+    peername: Tuple[str, int] = field()
+    fileno: int = field(default=-1)
 
     @classmethod
     def of(cls, sock: socket.socket):
@@ -50,14 +49,14 @@ def adaptive_bufsize(previous_bufsize, data_size):
         return previous_bufsize
 
 
-@dataclass
+@define(slots=True)
 class AbstractChannel:
 
-    _eventloop: 'EventLoop'
-    _socket: socket.socket
-    _handler_initializer: Callable = field(default_factory=LoggingChannelHandler)
+    _eventloop: 'EventLoop' = field()
+    _socket: socket.socket = field()
+    _handler_initializer: Callable = field(factory=LoggingChannelHandler)
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         self._fileno = self._socket.fileno()
         assert self._fileno > 0
         self._close_future = ChannelFuture(self)
@@ -90,6 +89,8 @@ class AbstractChannel:
 
     def channelinfo(self) -> Optional[ChannelInfo]:
         """Include ORIGINAL socket info, even if the sock is closed."""
+        if self._channelinfo is None:
+            _ = str(self)
         return self._channelinfo
 
     def register(self) -> 'ChannelFuture':
@@ -380,9 +381,9 @@ class NioServerSocketChannel(AbstractChannel):
                 return result
 
 
-@dataclass
+@define(slots=True)
 class ChannelContext:
-    _channel: AbstractChannel
+    _channel: AbstractChannel = field()
 
     def close(self):
         self._channel.close()
@@ -405,10 +406,10 @@ def _catch_exception(func):
     return inner
 
 
-@dataclass
+@define(slots=True)
 class ChannelHandlerContext:
 
-    _channel: AbstractChannel
+    _channel: AbstractChannel = field()
 
     def close(self):
         self._channel.close()
@@ -453,13 +454,13 @@ class ChannelHandlerContext:
         self.handler().channel_handshake_complete(self)
 
 
-@dataclass
+@define(slots=True)
 class ChannelFuture:
 
-    _channel: AbstractChannel
-    future: Future = None
+    _channel: AbstractChannel = field()
+    future: Future = field(default=None)
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         self.future = self.future or Future()
 
     def channel(self) -> AbstractChannel:

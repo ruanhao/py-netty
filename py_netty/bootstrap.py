@@ -2,11 +2,11 @@ import ssl
 import typing
 import socket
 import logging
-import dataclasses
 from functools import lru_cache
 from .eventloop import EventLoopGroup
 from .handler import EchoChannelHandler, ChannelHandlerAdapter
 from .channel import ChannelFuture, ChannelContext, NioSocketChannel, NioServerSocketChannel
+from attrs import define, field
 
 
 logger = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ def _handler_initializer():
 def _client_ssl_context(verify=True):
     if verify:
         return ssl.create_default_context()
-    else: # no verify
+    else:                       # no verify
         ssl_context = ssl._create_unverified_context()
         ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
         ssl_context.set_ciphers("ALL")
@@ -34,10 +34,10 @@ def _server_ssl_context(certfile, keyfile):
     return s_context
 
 
-@dataclasses.dataclass
+@define(slots=True)
 class Bootstrap:
-    eventloop_group: EventLoopGroup = dataclasses.field(default_factory=EventLoopGroup)
-    handler_initializer: typing.Callable = _handler_initializer
+    eventloop_group: EventLoopGroup = field(factory=EventLoopGroup)
+    handler_initializer: typing.Callable = field(default=_handler_initializer)
     tls: bool = False
     verify: bool = True
 
@@ -61,11 +61,11 @@ class Bootstrap:
         ).register()
 
 
-@dataclasses.dataclass
+@define(slots=True)
 class ServerBootstrap:
-    parant_group: EventLoopGroup = dataclasses.field(default_factory=EventLoopGroup)
-    child_group: EventLoopGroup = dataclasses.field(default_factory=EventLoopGroup)
-    child_handler_initializer: typing.Callable = _handler_initializer
+    parant_group: EventLoopGroup = field(factory=EventLoopGroup)
+    child_group: EventLoopGroup = field(factory=EventLoopGroup)
+    child_handler_initializer: typing.Callable = field(default=_handler_initializer)
     certfile: str = None
     keyfile: str = None
 
