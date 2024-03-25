@@ -248,14 +248,19 @@ class EventLoop:
             self._connect_timeout_due_millis.pop(fd, None)
 
     def _check_channel_active(self, channel: AbstractChannel):
+        if channel._ever_active:
+            return
         try:
             channel.socket().getpeername()
-            has_peer = True
+            no_peer = False
         except Exception:
-            has_peer = False
-        if not has_peer:
-            channel.set_active(False, 'no peer')
-            channel.channel_future().set(channel)
+            no_peer = True
+        if no_peer:
+            if not channel._ever_active:
+                channel.set_active(False, 'no peer')
+                channel.channel_future().set(channel)
+            else:               # half close
+                pass
             return
         if not channel._ever_active:  # first time to be active
             channel.set_active(True, 'first time to be active')

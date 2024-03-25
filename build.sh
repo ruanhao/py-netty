@@ -7,4 +7,5 @@
 
 tempdir="$(mktemp -d)"
 file "$tempdir"
-python setup.py sdist -d "$tempdir" bdist_wheel -d "$tempdir" && twine upload $tempdir/*
+python setup.py sdist -d "$tempdir" bdist_wheel -d "$tempdir" && [[ -n "$1" ]] && twine upload $tempdir/*
+echo "tempdir: $tempdir"
