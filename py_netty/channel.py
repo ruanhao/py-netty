@@ -11,6 +11,7 @@ from .handler import LoggingChannelHandler
 from .utils import sockinfo, log, LoggerAdapter, flag_to_str
 import selectors
 from attrs import define, field
+import errno
 
 logger = LoggerAdapter(logging.getLogger(__name__))
 
@@ -342,7 +343,7 @@ class NioSocketChannel(AbstractChannel):
                     logger.debug("recvall socket.error: %s, readable: %s", str(socket_err), self.is_readable())
                 if self.is_readable():
                     continue
-                return buffer, False
+                return buffer, socket_err.errno == errno.ECONNRESET
 
     def is_readable(self) -> bool:
         try:
