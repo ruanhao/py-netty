@@ -343,7 +343,7 @@ class NioSocketChannel(AbstractChannel):
                     logger.debug("recvall socket.error: %s, readable: %s", str(socket_err), self.is_readable())
                 if self.is_readable():
                     continue
-                return buffer, socket_err.errno == errno.ECONNRESET
+                return buffer, socket_err.errno in (errno.ECONNABORTED, errno.ECONNRESET)
 
     def is_readable(self) -> bool:
         try:
