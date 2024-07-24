@@ -15,6 +15,9 @@ import errno
 
 logger = LoggerAdapter(logging.getLogger(__name__))
 
+
+_DEFAULT_LOW_WATER_MARK = int(os.getenv('PY_NETTY_LOW_WATER_MARK', 32 * 1024))
+_DEFAULT_HIGH_WATER_MARK = int(os.getenv('PY_NETTY_HIGH_WATER_MARK', 64 * 1024))
 _ROUNDS = int(os.getenv('PY_NETTY_TUNING_ROUNDS', 16))
 _INITIAL_BUFFER_SIZE = int(os.getenv('PY_NETTY_TUNING_INIT_BUFFER_SIZE', 1024))
 _MIN_BUFFER_SIZE = int(os.getenv('PY_NETTY_TUNING_MIN_BUFFER_SIZE', _INITIAL_BUFFER_SIZE >> 1))
@@ -256,11 +259,27 @@ class NioSocketChannel(AbstractChannel):
     def __init__(self, eventloop: 'EventLoop', sock: socket.socket, handler_initializer: Callable, connect_timeout_millis: int = 3000):
         super().__init__(eventloop, sock, handler_initializer)
         self._pendings = []     # [Chunk, ...]
+        self._pending_bytes = 0
+        self._writable = True
         try:
             self.socket().setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except Exception:
             logger.exception("setsockopt TCP_NODELAY failed")
         self._connect_timeout_millis = connect_timeout_millis
+
+    def is_writable(self) -> bool:
+        return self._writable
+
+    def _check_writability(self):
+        # assert self.in_eventloop()
+        writable = self._writable
+        if self._pending_bytes >= _DEFAULT_HIGH_WATER_MARK:
+            writable = False
+        elif self._pending_bytes <= _DEFAULT_LOW_WATER_MARK:
+            writable = True
+        if self._writable != writable:
+            self._writable = writable
+            self.handler_context().fire_channel_writability_changed()
 
     def connect_timeout_millis(self) -> int:
         return self._connect_timeout_millis
@@ -270,6 +289,7 @@ class NioSocketChannel(AbstractChannel):
 
     def set_pendings(self, pendings: List['Chunk']):
         self._pendings = pendings
+        # self._pending_bytes = sum([len(c.buffer) for c in pendings])
         self.add_flag(selectors.EVENT_WRITE)
 
     def add_pending(self, chunk: 'Chunk'):
@@ -278,6 +298,7 @@ class NioSocketChannel(AbstractChannel):
         if chunk.close is False and not chunk.buffer:
             return
         self._pendings.append(chunk)
+        self._pending_bytes += len(chunk.buffer)
         self.add_flag(selectors.EVENT_WRITE)
 
     def has_pendings(self) -> bool:
@@ -449,6 +470,10 @@ class ChannelHandlerContext:
     @_catch_exception
     def fire_channel_inactive(self):
         self.handler().channel_inactive(self)
+
+    @_catch_exception
+    def fire_channel_writability_changed(self):
+        self.handler().channel_writability_changed(self)
 
     @_catch_exception
     def fire_channel_handshake_complete(self):

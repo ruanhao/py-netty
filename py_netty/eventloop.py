@@ -316,7 +316,9 @@ class EventLoop:
                                 break
                             l0 = len(head.buffer)
                             head.buffer = channel.try_send(head.buffer)
-                            self._total_sent += (l0 - len(head.buffer))
+                            sent_bytes = l0 - len(head.buffer)
+                            self._total_sent += sent_bytes
+                            channel._pending_bytes -= sent_bytes
                             if not head.buffer:  # all data sent for this chunk
                                 chunks = tail
                                 head.future.set_result(True)
@@ -327,6 +329,7 @@ class EventLoop:
                         channel.set_pendings(chunks)
                         if not channel.has_pendings():
                             channel.remove_flag(selectors.EVENT_WRITE)
+                    channel._check_writability()
 
                 if event & selectors.EVENT_READ and fileno in self._channels:
                     buffer, eof = channel.recvall()
