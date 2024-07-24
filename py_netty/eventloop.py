@@ -51,8 +51,26 @@ class EventLoop:
         self._total_tasks_submitted = 0
         self._total_tasks_processed = 0
 
-    def modify_flag(self, fileno, flag):
-        self._selector.modify(fileno, flag)
+    def modify_flag(self, channel):
+        if not self.in_eventloop():
+            self.submit_task(lambda: self.modify_flag(channel))
+            return
+
+        fileno = channel._fileno
+        flag = channel._flag
+
+        if flag == 0:
+            self._selector.unregister(fileno)
+            return
+
+        try:
+            self._selector.get_key(fileno)
+        except KeyError:
+            if channel.socket().fileno() == -1:
+                return
+            self._selector.register(channel, flag)
+        else:
+            self._selector.modify(fileno, flag)
 
     def submit_task(self, task):
         self.start()
@@ -92,16 +110,23 @@ class EventLoop:
     def in_eventloop(self):
         return self._thread == threading.current_thread()
 
-    def register(self, channel: AbstractChannel) -> ChannelFuture:
+    def register(self, channel: AbstractChannel, only_write=False) -> ChannelFuture:
         self.start()
 
         if not self.in_eventloop():
-            self.submit_task(lambda: self.register(channel))
+            self.submit_task(lambda: self.register(channel, only_write))
+            return channel.channel_future()
+
+        if channel.socket().fileno() == -1:
+            # channel closed already
             return channel.channel_future()
 
         channel.socket().setblocking(False)
 
-        flag = selectors.EVENT_READ | selectors.EVENT_WRITE
+        if only_write:
+            flag = selectors.EVENT_WRITE
+        else:
+            flag = selectors.EVENT_READ | selectors.EVENT_WRITE
         channel.set_flag(flag)
         self._selector.register(channel, flag)
         channel.handler_context().fire_channel_registered()

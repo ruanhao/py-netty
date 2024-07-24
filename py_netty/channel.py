@@ -107,28 +107,37 @@ class AbstractChannel:
         return self._flag
 
     def add_flag(self, flag):
+        if not self.in_eventloop():
+            self._eventloop.submit_task(lambda: self.add_flag(flag))
+            return
+
         if self._flag & flag:
             return
+
         self._flag |= flag
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("add flag %s(%s) to channel %s/%s, current flag: %s(%s)",
                          flag, flag_to_str(flag), self.id(), self._fileno, self._flag, flag_to_str(self._flag))
         try:
-            self.eventloop().modify_flag(self._fileno, self._flag)
-        except KeyError:
-            pass
-        except Exception:       # maybe fileno is closed
-            logger.exception("add flag %s(%s) to channel %s/%s failed", flag, flag_to_str(flag), self.id(), self._fileno)
+            self.eventloop().modify_flag(self)
+        except Exception:
+            logger.exception("add flag %s(%s) to channel %s/%s failed (maybe fileno is closed)", flag, flag_to_str(flag), self.id(), self._fileno)
 
     def remove_flag(self, flag):
+        if not self.in_eventloop():
+            self._eventloop.submit_task(lambda: self.remove_flag(flag))
+            return
+
         if not self._flag & flag:
             return
+
         self._flag &= ~flag
+
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("remove flag %s(%s) from channel %s/%s, current flag: %s(%s)",
                          flag, flag_to_str(flag), self.id(), self._fileno, self._flag, flag_to_str(self._flag))
         try:
-            self.eventloop().modify_flag(self._fileno, self._flag)
+            self.eventloop().modify_flag(self)
         except Exception:       # maybe fileno is closed
             logger.exception("remove flag %s(%s) from channel %s failed", flag, flag_to_str(flag), self.id())
 
@@ -261,6 +270,7 @@ class NioSocketChannel(AbstractChannel):
         self._pendings = []     # [Chunk, ...]
         self._pending_bytes = 0
         self._writable = True
+        self._auto_read = True
         try:
             self.socket().setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except Exception:
@@ -289,8 +299,6 @@ class NioSocketChannel(AbstractChannel):
 
     def set_pendings(self, pendings: List['Chunk']):
         self._pendings = pendings
-        # self._pending_bytes = sum([len(c.buffer) for c in pendings])
-        self.add_flag(selectors.EVENT_WRITE)
 
     def add_pending(self, chunk: 'Chunk'):
         if chunk is None:
@@ -300,6 +308,19 @@ class NioSocketChannel(AbstractChannel):
         self._pendings.append(chunk)
         self._pending_bytes += len(chunk.buffer)
         self.add_flag(selectors.EVENT_WRITE)
+
+    def is_auto_read(self) -> bool:
+        return self._auto_read
+
+    # a way of flow control
+    def set_auto_read(self, auto_read: bool):
+        if self._auto_read == auto_read:
+            return
+        self._auto_read = auto_read
+        if auto_read:
+            self.add_flag(selectors.EVENT_READ)
+        else:
+            self.remove_flag(selectors.EVENT_READ)
 
     def has_pendings(self) -> bool:
         return len(self._pendings) > 0
