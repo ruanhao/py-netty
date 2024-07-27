@@ -12,7 +12,8 @@ APIs are intuitive to use if you are a Netty alcoholic.
 - callback based application invocation
 - non blocking IO
 - recv/write is performed only in IO thread
-- adaptive read buffer
+- adaptive read buffer 
+- low/higher water mark to indicate writability (default low water mark is 32K and high water mark is 64K)
 - all platform supported (linux: epoll, mac: kqueue, windows: select)
 
 ## Installation
@@ -160,6 +161,10 @@ class MyChannelHandler(ChannelHandlerAdapter):
 
     def channel_handshake_complete(self, ctx: 'ChannelHandlerContext') -> None:
         # invoked when ssl handshake is complete, this only applies to client side
+        pass
+
+    def channel_writability_changed(self, ctx: 'ChannelHandlerContext') -> None:
+        # invoked when pending data > high water mark or < low water mark
         pass
 
     def exception_caught(self, ctx: 'ChannelHandlerContext', exception: Exception) -> None:
