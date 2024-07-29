@@ -198,6 +198,8 @@ class EventLoop:
         logger.debug("total tasks processed: %s", self._total_tasks_processed)
         logger.debug("pending connections:   %s", len(self._connect_timeout_due_millis))
         logger.debug("active connections:    %s", max(0, len(self._channels) - len(self._connect_timeout_due_millis)))
+        logger.debug("current hooked:        %s", len(self._selector.get_map()))
+        logger.debug("hooks:                 %s", self._selector._fd_to_key)
 
         logger.debug(" channels ".center(n, '='))
         for channel in self._channels.values():

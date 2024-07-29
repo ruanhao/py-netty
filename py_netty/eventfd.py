@@ -1,6 +1,7 @@
 import os
 import socket
 import select
+from threading import Lock
 
 
 class BaseEventFD(object):
@@ -19,6 +20,8 @@ class BaseEventFD(object):
         self._flag = False
         self._read_fd = None
         self._write_fd = None
+        self._unsafe_counts = 0
+        self._lock = Lock()
 
     def _read(self, len):
         return os.read(self._read_fd, len)
@@ -42,10 +45,16 @@ class BaseEventFD(object):
             assert self._read(len(self._DATA)) == self._DATA
 
     def unsafe_write(self):
-        self._write(self._DATA)
+        with self._lock:
+            if self._unsafe_counts > 0:
+                return
+            self._write(self._DATA)
+            self._unsafe_counts += 1
 
     def unsafe_read(self):
         self._read(len(self._DATA))
+        with self._lock:
+            self._unsafe_counts -= 1
 
     def set(self):
         """Set the internal flag to true.
