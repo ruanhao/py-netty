@@ -274,7 +274,8 @@ class NioSocketChannel(AbstractChannel):
         try:
             self.socket().setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except Exception:
-            logger.exception("setsockopt TCP_NODELAY failed")
+            # (Windows) OSError: [WinError 10022] An invalid argument was supplied
+            pass
         self._connect_timeout_millis = connect_timeout_millis
 
     def is_writable(self) -> bool:
