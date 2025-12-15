@@ -51,16 +51,16 @@ class Bootstrap:
                 logger.error("Error in ssl_context_cb(client): %s", e)
         return ctx
 
-    def _wrap_ssl_socket(self, sock, server_hostname_or_address):
-        return self._create_ssl_context().wrap_socket(sock, server_hostname=server_hostname_or_address)
+    def _wrap_ssl_socket(self, sock, server_hostname_or_address, sni: str | None = None) -> ssl.SSLSocket:
+        return self._create_ssl_context().wrap_socket(sock, server_hostname=sni or server_hostname_or_address)
 
-    def connect(self, address, port, ensure_connected: bool = False) -> ChannelFuture:
+    def connect(self, address, port, ensure_connected: bool = False, sni: str | None = None) -> ChannelFuture:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         # if ensure_connected or self.tls:
         if ensure_connected:
             sock.connect((address, port))
             if self.tls:
-                sock = self._wrap_ssl_socket(sock, address)
+                sock = self._wrap_ssl_socket(sock, address, sni)
             sock.setblocking(False)
         else:
             sock.setblocking(False)
