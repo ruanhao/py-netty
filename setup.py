@@ -6,7 +6,7 @@ this_directory = Path(__file__).parent
 long_description = (this_directory / "README.md").read_text()
 # install_requires = (this_directory / 'requirements.txt').read_text().splitlines()
 
-version = '1.0.7'
+version = '1.0.8'
 
 config = {
     'name': 'py-netty',
@@ -15,7 +15,7 @@ config = {
     "long_description": long_description,
     "long_description_content_type": 'text/markdown',
     'description': 'TCP framework in flavor of Netty',
-    'author' : 'Hao Ruan',
+    'author': 'Hao Ruan',
     'author_email': 'ruanhao1116@gmail.com',
     'keywords': ['network', 'tcp', 'non-blocking', 'epoll', 'nio', 'netty'],
     'version': version,
@@ -36,6 +36,7 @@ config = {
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
         "Programming Language :: Python :: 3 :: Only",
         "Topic :: Software Development :: Libraries",
     ],
