@@ -6,7 +6,7 @@ this_directory = Path(__file__).parent
 long_description = (this_directory / "README.md").read_text()
 # install_requires = (this_directory / 'requirements.txt').read_text().splitlines()
 
-version = '1.0.8'
+version = '1.0.9'
 
 config = {
     'name': 'py-netty',
@@ -20,7 +20,7 @@ config = {
     'keywords': ['network', 'tcp', 'non-blocking', 'epoll', 'nio', 'netty'],
     'version': version,
     'packages': find_packages(),
-    'install_requires': ['attrs'],
+    'install_requires': ['attrs', 'pysocks'],
     'python_requires': ">=3.7, <4",
     'setup_requires': ['wheel'],
     'classifiers': [

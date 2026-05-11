@@ -1,4 +1,5 @@
 import ssl
+import socks
 import typing
 import socket
 import logging
@@ -54,8 +55,10 @@ class Bootstrap:
     def _wrap_ssl_socket(self, sock, server_hostname_or_address, sni: str | None = None) -> ssl.SSLSocket:
         return self._create_ssl_context().wrap_socket(sock, server_hostname=sni or server_hostname_or_address)
 
-    def connect(self, address, port, ensure_connected: bool = False, sni: str | None = None) -> ChannelFuture:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    def connect(self, address, port, ensure_connected: bool = False, sni: str | None = None, use_socksocket: bool = False) -> ChannelFuture:
+        # if use_socksocket is enabled, please make sure socks.set_default_proxy() is prepared beforehand
+        sock = (socks.socksocket if use_socksocket else socket.socket)(socket.AF_INET, socket.SOCK_STREAM)
+
         # if ensure_connected or self.tls:
         if ensure_connected:
             sock.connect((address, port))
