@@ -1,5 +1,9 @@
 # py-netty :rocket:
 
+[![CI](https://github.com/ruanhao/py-netty/actions/workflows/ci.yml/badge.svg)](https://github.com/ruanhao/py-netty/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/ruanhao/py-netty/branch/main/graph/badge.svg)](https://codecov.io/gh/ruanhao/py-netty)
+[![Downloads](https://static.pepy.tech/badge/py-netty)](https://pepy.tech/project/py-netty)
+
 An event-driven TCP networking framework.
 
 Ideas and concepts under the hood are build upon those of [Netty](https://netty.io/), especially the IO and executor model.
@@ -223,5 +227,4 @@ Test is performed using echo client/server mechanism on a 1-Core 2.0GHz Intel(R)
 - No pipeline, supports only one handler FOR NOW
 - No batteries-included codecs FOR NOW
 - No pool or refcnt for bytes buffer, bytes objects are created and consumed at your disposal
-
 
