@@ -1,6 +1,8 @@
 import os
 import select
 
+import pytest
+
 from py_netty.eventfd import PipeEventFD, SocketEventFD, eventfd
 
 
@@ -8,6 +10,10 @@ def _is_readable(fd, timeout=0):
     return select.select([fd], [], [], timeout)[0] == [fd]
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows select() only supports sockets; eventfd() uses SocketEventFD there.",
+)
 class TestPipeEventFD:
 
     def test_set_clear_and_wait(self):

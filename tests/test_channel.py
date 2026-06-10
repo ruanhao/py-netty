@@ -570,7 +570,9 @@ class TestNioSocketChannel:
 
         assert channel.recvall() == (b"hello", False)
 
-    def test_is_readable_uses_peek_without_consuming_data(self):
+    def test_is_readable_uses_peek_without_consuming_data(self, monkeypatch):
+        monkeypatch.setattr(channel_module.socket, "MSG_DONTWAIT", 0, raising=False)
+
         assert make_channel(sock=FakeSocket(peek_result=b"x")).is_readable() is True
         assert make_channel(sock=FakeSocket(peek_result=b"")).is_readable() is False
 
