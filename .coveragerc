@@ -1,0 +1,14 @@
+[run]
+branch = True
+source = py_netty
+
+[report]
+show_missing = True
+skip_empty = True
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+
+[html]
+directory = htmlcov
+title = py-netty coverage report
