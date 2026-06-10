@@ -329,10 +329,17 @@ class TestServerBootstrapBind:
         with pytest.raises(AssertionError, match="Both certfile and keyfile"):
             ServerBootstrap(keyfile="key.pem").bind(port=8443)
 
+    def test_accepts_parent_group(self):
+        parent_group = FakeEventLoopGroup("parent-loop")
+
+        bootstrap = ServerBootstrap(parent_group=parent_group)
+
+        assert bootstrap.parent_group is parent_group
+
     def test_bind_configures_plain_server_socket_and_registers_server_channel(self, monkeypatch):
         server_socket = FakeSocket("server")
         parent_group, child_group = self.patch_bind_dependencies(monkeypatch, server_socket)
-        bootstrap = ServerBootstrap(parant_group=parent_group, child_group=child_group)
+        bootstrap = ServerBootstrap(parent_group=parent_group, child_group=child_group)
 
         future = bootstrap.bind(address="127.0.0.1", port=8080)
 
@@ -362,7 +369,7 @@ class TestServerBootstrapBind:
             raise RuntimeError("bad server callback")
 
         bootstrap = ServerBootstrap(
-            parant_group=parent_group,
+            parent_group=parent_group,
             child_group=child_group,
             certfile="cert.pem",
             keyfile="key.pem",
@@ -387,7 +394,7 @@ class TestServerBootstrapBind:
         parent_group, child_group = self.patch_bind_dependencies(monkeypatch, raw_socket)
         monkeypatch.setattr(bootstrap_module, "_server_ssl_context", lambda certfile, keyfile: ssl_ctx)
         bootstrap = ServerBootstrap(
-            parant_group=parent_group,
+            parent_group=parent_group,
             child_group=child_group,
             certfile="cert.pem",
             keyfile="key.pem",
@@ -406,7 +413,7 @@ class TestServerBootstrapBind:
         parent_group, child_group = self.patch_bind_dependencies(monkeypatch, raw_socket)
         monkeypatch.setattr(bootstrap_module, "_server_ssl_context", lambda certfile, keyfile: ssl_ctx)
         bootstrap = ServerBootstrap(
-            parant_group=parent_group,
+            parent_group=parent_group,
             child_group=child_group,
             certfile="cert.pem",
             keyfile="key.pem",
@@ -423,7 +430,7 @@ class TestServerBootstrapBind:
         parent_group, child_group = self.patch_bind_dependencies(monkeypatch, server_socket)
         child_handler_initializer = object()
         bootstrap = ServerBootstrap(
-            parant_group=parent_group,
+            parent_group=parent_group,
             child_group=child_group,
             child_handler_initializer=child_handler_initializer,
         )

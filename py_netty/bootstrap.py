@@ -79,7 +79,7 @@ class Bootstrap:
 
 @define(slots=True)
 class ServerBootstrap:
-    parant_group: EventLoopGroup = field(factory=EventLoopGroup)
+    parent_group: EventLoopGroup = field(factory=EventLoopGroup)
     child_group: EventLoopGroup = field(factory=EventLoopGroup)
     child_handler_initializer: typing.Callable = field(default=_handler_initializer)
     certfile: str = None
@@ -102,7 +102,7 @@ class ServerBootstrap:
         server_socket.bind((address, port))
         server_socket.listen(128)
         server_socket.setblocking(0)
-        eventloop = self.parant_group.get_eventloop()
+        eventloop = self.parent_group.get_eventloop()
 
         class _ChannelInitializer(ChannelHandlerAdapter):
             def channel_read(this, ctx: ChannelContext, client_socket: socket.socket):

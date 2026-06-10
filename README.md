@@ -127,7 +127,7 @@ class ProxyChannelHandler(ChannelHandlerAdapter):
 proxied_server, proxied_port = 'www.google.com', 443
 client_eventloop_group = EventLoopGroup(1, 'ClientEventloopGroup')
 sb = ServerBootstrap(
-    parant_group=EventLoopGroup(1, 'Acceptor'),
+    parent_group=EventLoopGroup(1, 'Acceptor'),
     child_group=EventLoopGroup(1, 'Worker'),
     child_handler_initializer=lambda: ProxyChannelHandler(proxied_server, proxied_port, client_eventloop_group)
 )
