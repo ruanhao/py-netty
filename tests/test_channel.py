@@ -256,6 +256,18 @@ class TestChannelFuture:
 
         assert calls == [future]
 
+    def test_set_exception_makes_sync_raise(self):
+        channel = StubChannel()
+        future = ChannelFuture(channel)
+        exception = OSError("connect failed")
+
+        future.set_exception(exception)
+        future.set(channel)
+
+        assert future.done() is True
+        with pytest.raises(OSError, match="connect failed"):
+            future.sync()
+
 
 class TestAbstractChannelFlags:
 

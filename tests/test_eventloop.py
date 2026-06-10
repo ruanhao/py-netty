@@ -1,5 +1,7 @@
+import errno
 import logging
 import selectors
+import socket
 import threading
 from concurrent.futures import Future
 
@@ -100,9 +102,10 @@ class FakePool:
 
 class FakeSocket:
 
-    def __init__(self, fileno=100, peer=True):
+    def __init__(self, fileno=100, connect_error=0, connect_error_exception=None):
         self._fileno = fileno
-        self.peer = peer
+        self.connect_error = connect_error
+        self.connect_error_exception = connect_error_exception
         self.closed = False
         self.blocking_values = []
 
@@ -115,9 +118,14 @@ class FakeSocket:
     def close(self):
         self.closed = True
 
+    def getsockopt(self, level, optname):
+        if self.connect_error_exception:
+            raise self.connect_error_exception
+        assert level == socket.SOL_SOCKET
+        assert optname == socket.SO_ERROR
+        return self.connect_error
+
     def getpeername(self):
-        if not self.peer:
-            raise OSError("no peer")
         return ("127.0.0.1", 10001)
 
 
@@ -605,21 +613,46 @@ class TestTimeoutAndPolling:
 
         assert "checking connection timeout, countdowns:" in caplog.text
 
-    def test_check_channel_active_handles_no_peer_and_first_active(self, loop):
-        no_peer = FakeChannel(sock=FakeSocket(peer=False))
-        loop._check_channel_active(no_peer)
-        assert no_peer.events == [("active", False, "no peer")]
-        assert no_peer.channel_future().done() is True
-
+    def test_check_channel_active_uses_so_error_for_first_active(self, loop):
         peer = FakeChannel(101)
         loop._connect_timeout_due_millis[101] = 1
-        loop._check_channel_active(peer)
+        assert loop._check_channel_active(peer) is True
         assert peer.events == [("active", True, "first time to be active")]
         assert peer.channel_future().done() is True
         assert 101 not in loop._connect_timeout_due_millis
 
-        loop._check_channel_active(peer)
+        assert loop._check_channel_active(peer) is True
         assert peer.events == [("active", True, "first time to be active")]
+
+    def test_check_channel_active_closes_on_connect_error(self, loop):
+        enter_loop(loop)
+        channel = FakeChannel(sock=FakeSocket(connect_error=errno.ECONNREFUSED))
+        loop._connect_timeout_due_millis[channel.fileno0()] = 1
+
+        assert loop._check_channel_active(channel) is False
+
+        assert channel.socket().closed is True
+        assert channel.close_future().done() is True
+        assert channel.unregister_calls == 1
+        assert channel.events[0][0] == "active"
+        assert channel.events[0][1] is False
+        assert channel.events[0][2].startswith("connect failed:")
+        assert channel.fileno0() not in loop._connect_timeout_due_millis
+        with pytest.raises(OSError) as exc_info:
+            channel.channel_future().sync()
+        assert exc_info.value.errno == errno.ECONNREFUSED
+
+    def test_check_channel_active_closes_when_so_error_check_fails(self, loop):
+        enter_loop(loop)
+        failure = OSError("bad status")
+        channel = FakeChannel(sock=FakeSocket(connect_error_exception=failure))
+
+        assert loop._check_channel_active(channel) is False
+
+        assert channel.socket().closed is True
+        assert channel.close_future().done() is True
+        with pytest.raises(OSError, match="bad status"):
+            channel.channel_future().sync()
 
 
 class TestStartLoop:

@@ -529,5 +529,10 @@ class ChannelFuture:
             return
         self.future.set_result(channel)
 
+    def set_exception(self, exception: Exception) -> None:
+        if self.future.done():
+            return
+        self.future.set_exception(exception)
+
     def add_listener(self, listener: Callable) -> None:
         self.future.add_done_callback(lambda f: listener(self))

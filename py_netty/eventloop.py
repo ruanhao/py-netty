@@ -3,6 +3,7 @@ import time
 import itertools
 import selectors
 import logging
+import socket
 import threading
 from .eventfd import eventfd
 from concurrent.futures import ThreadPoolExecutor
@@ -276,23 +277,28 @@ class EventLoop:
 
     def _check_channel_active(self, channel: AbstractChannel):
         if channel._ever_active:
-            return
+            return True
+
         try:
-            channel.socket().getpeername()
-            no_peer = False
-        except Exception:
-            no_peer = True
-        if no_peer:
-            if not channel._ever_active:
-                channel.set_active(False, 'no peer')
-                channel.channel_future().set(channel)
-            else:               # half close
-                pass
-            return
-        if not channel._ever_active:  # first time to be active
-            channel.set_active(True, 'first time to be active')
-            channel.channel_future().set(channel)
-            self._connect_timeout_due_millis.pop(channel.fileno(), None)
+            connect_error = channel.socket().getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+        except OSError as e:
+            channel.channel_future().set_exception(e)
+            self._connect_timeout_due_millis.pop(channel.fileno0(), None)
+            self._close_channel_internally(channel, reason=f'connect status check failed: {e}')
+            return False
+
+        if connect_error:
+            exception = OSError(connect_error, os.strerror(connect_error))
+            logger.error("connection failed: %s: %s", channel, exception)
+            channel.channel_future().set_exception(exception)
+            self._connect_timeout_due_millis.pop(channel.fileno0(), None)
+            self._close_channel_internally(channel, reason=f'connect failed: {exception}')
+            return False
+
+        channel.set_active(True, 'first time to be active')
+        channel.channel_future().set(channel)
+        self._connect_timeout_due_millis.pop(channel.fileno(), None)
+        return True
 
     @log(logger)
     def _start(self):
@@ -330,7 +336,8 @@ class EventLoop:
                     continue
 
                 if event & selectors.EVENT_WRITE:
-                    self._check_channel_active(channel)
+                    if not self._check_channel_active(channel):
+                        continue
                     if not channel.has_pendings():  # has no pending chunks
                         channel.remove_flag(selectors.EVENT_WRITE)
                     else:
@@ -362,7 +369,8 @@ class EventLoop:
                     buffer, eof = channel.recvall()
                     self._total_received += len(buffer)
                     if buffer:
-                        self._check_channel_active(channel)
+                        if not self._check_channel_active(channel):
+                            continue
                         # logger.info("receive: %s bytes: %s", len(buffer), buffer.decode('utf-8').replace('\n', '\\n'))
                         channel.handler_context().fire_channel_read(buffer)
                     elif eof:
