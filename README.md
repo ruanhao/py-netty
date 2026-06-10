@@ -6,9 +6,9 @@
 
 An event-driven TCP networking framework.
 
-Ideas and concepts under the hood are build upon those of [Netty](https://netty.io/), especially the IO and executor model.
+Ideas and concepts under the hood are built upon those of [Netty](https://netty.io/), especially the IO and executor model.
 
-APIs are intuitive to use if you are a Netty alcoholic.
+APIs are designed to feel familiar to Netty users.
 
 
 # Features
@@ -39,7 +39,7 @@ Start an echo server (TLS):
 
 ```python
 from py_netty import ServerBootstrap
-ServerBootstrap(certfile='/path/to/cert/file', keyfile='/path/to/cert/file').bind(address='0.0.0.0', port=9443).close_future().sync()
+ServerBootstrap(certfile='/path/to/cert/file', keyfile='/path/to/key/file').bind(address='0.0.0.0', port=9443).close_future().sync()
 ```
 
 As TCP client:
@@ -193,28 +193,28 @@ Test is performed using echo client/server mechanism on a 1-Core 2.0GHz Intel(R)
 3. Ramp up time (seconds consumed after all connections established) to indicate responsiveness
 
 ### Case 1: Concurrent 64 connections with 32K/s 
-![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_32K_throuput.png)
+![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_32K_throughput.png)
 ![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_32K_average.png)
 ![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_32K_rampup.png)
 
 ### Case 2: Concurrent 64 connections with 4M/s 
-![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_4M_throuput.png)
+![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_4M_throughput.png)
 ![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_4M_average.png)
 ![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_4M_rampup.png)
 
 ### Case 3: Concurrent 128 connections with 4M/s 
-![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_4M_throuput.png)
+![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_4M_throughput.png)
 ![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_4M_average.png)
 ![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_4M_rampup.png)
 
 ### Case 4: Concurrent 128 connections with 8M/s 
-![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_8M_throuput.png)
+![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_8M_throughput.png)
 ![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_8M_average.png)
 ![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_8M_rampup.png)
 
 
 ### Case 5: Concurrent 256 connections with 8M/s 
-![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/256_concurrent_8M_throuput.png)
+![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/256_concurrent_8M_throughput.png)
 ![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/256_concurrent_8M_average.png)
 ![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/256_concurrent_8M_rampup.png)
 
