@@ -53,7 +53,11 @@ class Bootstrap:
         return ctx
 
     def _wrap_ssl_socket(self, sock, server_hostname_or_address, sni: str | None = None) -> ssl.SSLSocket:
-        return self._create_ssl_context().wrap_socket(sock, server_hostname=sni or server_hostname_or_address)
+        return self._create_ssl_context().wrap_socket(
+            sock,
+            server_hostname=sni or server_hostname_or_address,
+            do_handshake_on_connect=False,
+        )
 
     def connect(self, address, port, ensure_connected: bool = False, sni: str | None = None, use_socksocket: bool = False) -> ChannelFuture:
         # if use_socksocket is enabled, please make sure socks.set_default_proxy() is prepared beforehand
@@ -68,12 +72,13 @@ class Bootstrap:
         else:
             sock.setblocking(False)
             if self.tls:
-                sock = self._wrap_ssl_socket(sock, address)
+                sock = self._wrap_ssl_socket(sock, address, sni)
             sock.connect_ex((address, port))  # non blocking
         return NioSocketChannel(
             self.eventloop_group.get_eventloop(),
             sock,
-            handler_initializer=self.handler_initializer
+            handler_initializer=self.handler_initializer,
+            ssl_handshake=self.tls,
         ).register()
 
 

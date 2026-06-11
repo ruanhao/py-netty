@@ -88,10 +88,11 @@ class FakeNioSocketChannel:
 
     instances = []
 
-    def __init__(self, eventloop, sock, handler_initializer):
+    def __init__(self, eventloop, sock, handler_initializer, ssl_handshake=False):
         self.eventloop = eventloop
         self.sock = sock
         self.handler_initializer = handler_initializer
+        self.ssl_handshake = ssl_handshake
         self.registered = False
         self.future = object()
         self.__class__.instances.append(self)
@@ -215,8 +216,14 @@ class TestBootstrapSslMethods:
 
         assert wrapped is ctx.wrapped[0][0] or wrapped is ctx.next_socket
         assert wrapped_by_address is ctx.next_socket
-        assert ctx.wrapped[0] == (sock, {"server_hostname": "sni.example.com"})
-        assert ctx.wrapped[1] == (sock, {"server_hostname": "example.org"})
+        assert ctx.wrapped[0] == (
+            sock,
+            {"server_hostname": "sni.example.com", "do_handshake_on_connect": False},
+        )
+        assert ctx.wrapped[1] == (
+            sock,
+            {"server_hostname": "example.org", "do_handshake_on_connect": False},
+        )
 
 
 class TestBootstrapConnect:
@@ -243,6 +250,7 @@ class TestBootstrapConnect:
         assert channel.eventloop == "client-loop"
         assert channel.sock is sock
         assert channel.handler_initializer is handler_initializer
+        assert channel.ssl_handshake is False
         assert channel.registered is True
 
     def test_connect_ensure_connected_uses_blocking_connect_then_nonblocking(self, monkeypatch):
@@ -275,8 +283,9 @@ class TestBootstrapConnect:
         assert calls == [(sock, "example.com", "custom.sni")]
         assert wrapped.blocking_values == [False]
         assert FakeNioSocketChannel.instances[-1].sock is wrapped
+        assert FakeNioSocketChannel.instances[-1].ssl_handshake is True
 
-    def test_connect_nonblocking_tls_wraps_with_address_before_connect_ex(self, monkeypatch):
+    def test_connect_nonblocking_tls_wraps_with_sni_before_connect_ex(self, monkeypatch):
         sock = FakeSocket("plain")
         wrapped = FakeSocket("wrapped")
         group = self.patch_connect_dependencies(monkeypatch, sock)
@@ -292,9 +301,10 @@ class TestBootstrapConnect:
         bootstrap.connect("example.com", 443, sni="ignored.sni")
 
         assert sock.blocking_values == [False]
-        assert calls == [(sock, "example.com", None)]
+        assert calls == [(sock, "example.com", "ignored.sni")]
         assert wrapped.connect_ex_calls == [("example.com", 443)]
         assert FakeNioSocketChannel.instances[-1].sock is wrapped
+        assert FakeNioSocketChannel.instances[-1].ssl_handshake is True
 
     def test_connect_can_use_socksocket(self, monkeypatch):
         plain_sock = FakeSocket("plain")

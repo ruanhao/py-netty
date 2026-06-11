@@ -96,19 +96,6 @@ class FakeSocket:
         return ("127.0.0.1", 10001)
 
 
-class FakeSslSocket(FakeSocket):
-
-    def __init__(self, handshake_result=None):
-        super().__init__()
-        self.handshake_result = handshake_result
-        self.handshake_calls = []
-
-    def do_handshake(self, block):
-        self.handshake_calls.append(block)
-        if isinstance(self.handshake_result, Exception):
-            raise self.handshake_result
-
-
 class FakeServerSocket(FakeSocket):
 
     def __init__(self, accepted):
@@ -393,66 +380,6 @@ class TestAbstractChannelSetActive:
 
         assert channel.is_active() is True
         assert handler.events == []
-
-    def test_set_active_ssl_success_fires_handshake_complete_before_active(self, monkeypatch):
-        """Test objective: successful SSL handshake fires channel_handshake_complete before channel_active."""
-        monkeypatch.setattr(channel_module.ssl, "SSLSocket", FakeSslSocket)
-        sock = FakeSslSocket()
-        channel = make_channel(sock=sock)
-        handler = channel.handler()
-
-        channel.set_active(True)
-
-        assert sock.handshake_calls == [True]
-        assert [event[0] for event in handler.events] == [
-            "handshake_complete",
-            "active",
-        ]
-
-    def test_set_active_ssl_slow_handshake_logs_warning(self, monkeypatch, caplog):
-        """Test objective: successful SSL handshake over one second logs a warning and still fires active."""
-        monkeypatch.setattr(channel_module.ssl, "SSLSocket", FakeSslSocket)
-        perf_values = iter([1.0, 2.5])
-        monkeypatch.setattr(channel_module.time, "perf_counter", lambda: next(perf_values))
-        sock = FakeSslSocket()
-        channel = make_channel(sock=sock)
-        handler = channel.handler()
-
-        channel.set_active(True)
-
-        assert "ssl handshake cost: ~1.5s" in caplog.text
-        assert [event[0] for event in handler.events] == [
-            "handshake_complete",
-            "active",
-        ]
-
-    def test_set_active_ssl_timeout_closes_forcibly_and_still_fires_active(self, monkeypatch):
-        """Test objective: SSL handshake timeout closes forcibly and preserves current channel_active behavior."""
-        monkeypatch.setattr(channel_module.ssl, "SSLSocket", FakeSslSocket)
-        eventloop = FakeEventLoop()
-        sock = FakeSslSocket(socket.timeout("timed out"))
-        channel = make_channel(eventloop=eventloop, sock=sock)
-        handler = channel.handler()
-
-        channel.set_active(True)
-
-        assert sock.handshake_calls == [True]
-        assert eventloop.closed == [(channel, "close channel forcibly")]
-        assert channel.close_future().done() is True
-        assert handler.events == [("active", channel.handler_context())]
-
-    def test_set_active_ssl_socket_error_skips_handshake_complete_and_fires_active(self, monkeypatch):
-        """Test objective: SSL handshake socket.error skips handshake_complete but still fires channel_active."""
-        monkeypatch.setattr(channel_module.ssl, "SSLSocket", FakeSslSocket)
-        sock = FakeSslSocket(socket.error(errno.ENOTCONN, "not connected"))
-        channel = make_channel(sock=sock)
-        handler = channel.handler()
-
-        channel.set_active(True)
-
-        assert sock.handshake_calls == [True]
-        assert handler.events == [("active", channel.handler_context())]
-
 
 class TestNioSocketChannel:
 

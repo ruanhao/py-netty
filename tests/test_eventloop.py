@@ -2,6 +2,7 @@ import errno
 import logging
 import selectors
 import socket
+import ssl
 import threading
 from concurrent.futures import Future
 
@@ -129,6 +130,20 @@ class FakeSocket:
         return ("127.0.0.1", 10001)
 
 
+class FakeSslSocket(FakeSocket):
+
+    def __init__(self, fileno=100, handshake_results=None, **kwargs):
+        super().__init__(fileno=fileno, **kwargs)
+        self.handshake_results = list(handshake_results or [None])
+        self.handshake_calls = 0
+
+    def do_handshake(self):
+        self.handshake_calls += 1
+        result = self.handshake_results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+
+
 class FakeHandlerContext:
 
     def __init__(self, channel):
@@ -143,10 +158,13 @@ class FakeHandlerContext:
     def fire_channel_read(self, msg):
         self.channel.events.append(("read", msg))
 
+    def fire_channel_handshake_complete(self):
+        self.channel.events.append(("handshake_complete", None))
+
 
 class FakeChannel:
 
-    def __init__(self, fileno=100, server=False, sock=None):
+    def __init__(self, fileno=100, server=False, sock=None, ssl_handshake=False):
         self._fileno = fileno
         self._flag = 0
         self._ever_active = False
@@ -164,6 +182,8 @@ class FakeChannel:
         self.accept_results = []
         self._pendings = []
         self.connect_timeout = 3000
+        self._ssl_handshake_required = ssl_handshake
+        self._ssl_handshake_complete = not ssl_handshake
 
     def __str__(self):
         return f"FakeChannel({self._fileno})"
@@ -201,6 +221,15 @@ class FakeChannel:
     def set_active(self, active, reason=""):
         self._ever_active = active
         self.events.append(("active", active, reason))
+
+    def needs_ssl_handshake(self):
+        return self._ssl_handshake_required and not self._ssl_handshake_complete
+
+    def set_ssl_handshake_complete(self):
+        self._ssl_handshake_complete = True
+
+    def add_flag(self, flag):
+        self._flag |= flag
 
     def connect_timeout_millis(self):
         return self.connect_timeout
@@ -624,6 +653,87 @@ class TestTimeoutAndPolling:
         assert loop._check_channel_active(peer) is True
         assert peer.events == [("active", True, "first time to be active")]
 
+    def test_check_channel_active_completes_ssl_handshake_before_active(self, loop):
+        channel = FakeChannel(
+            101,
+            sock=FakeSslSocket(101),
+            ssl_handshake=True,
+        )
+        loop._connect_timeout_due_millis[101] = 1
+
+        assert loop._check_channel_active(channel) is True
+
+        assert channel.socket().handshake_calls == 1
+        assert channel._ssl_handshake_complete is True
+        assert channel.events == [
+            ("handshake_complete", None),
+            ("active", True, "ssl handshake complete"),
+        ]
+        assert channel.channel_future().done() is True
+        assert 101 not in loop._connect_timeout_due_millis
+
+    def test_check_channel_active_waits_for_ssl_handshake_readiness(self, loop):
+        channel = FakeChannel(
+            101,
+            sock=FakeSslSocket(101, handshake_results=[ssl.SSLWantReadError(), None]),
+            ssl_handshake=True,
+        )
+        channel._flag = selectors.EVENT_READ | selectors.EVENT_WRITE
+
+        assert loop._check_channel_active(channel) is False
+
+        assert channel.socket().handshake_calls == 1
+        assert channel.removed_flags == [selectors.EVENT_WRITE]
+        assert channel._flag == selectors.EVENT_READ
+        assert channel.events == []
+        assert channel.channel_future().done() is False
+
+        assert loop._check_channel_active(channel) is True
+        assert channel.events == [
+            ("handshake_complete", None),
+            ("active", True, "ssl handshake complete"),
+        ]
+
+    def test_check_channel_active_waits_for_ssl_handshake_writability(self, loop):
+        channel = FakeChannel(
+            101,
+            sock=FakeSslSocket(101, handshake_results=[ssl.SSLWantWriteError(), None]),
+            ssl_handshake=True,
+        )
+        channel._flag = selectors.EVENT_READ
+
+        assert loop._check_channel_active(channel) is False
+
+        assert channel.socket().handshake_calls == 1
+        assert channel._flag == selectors.EVENT_READ | selectors.EVENT_WRITE
+        assert channel.events == []
+
+        assert loop._check_channel_active(channel) is True
+        assert channel.events == [
+            ("handshake_complete", None),
+            ("active", True, "ssl handshake complete"),
+        ]
+
+    def test_check_channel_active_closes_on_ssl_handshake_error(self, loop):
+        enter_loop(loop)
+        failure = ssl.SSLError("bad handshake")
+        channel = FakeChannel(
+            101,
+            sock=FakeSslSocket(101, handshake_results=[failure]),
+            ssl_handshake=True,
+        )
+        loop._channels[101] = channel
+        loop._connect_timeout_due_millis[101] = 1
+
+        assert loop._check_channel_active(channel) is False
+
+        assert channel.socket().closed is True
+        assert channel.close_future().done() is True
+        assert channel.unregister_calls == 1
+        assert 101 not in loop._connect_timeout_due_millis
+        with pytest.raises(ssl.SSLError, match="bad handshake"):
+            channel.channel_future().sync()
+
     def test_check_channel_active_closes_on_connect_error(self, loop):
         enter_loop(loop)
         channel = FakeChannel(sock=FakeSocket(connect_error=errno.ECONNREFUSED))
@@ -732,6 +842,27 @@ class TestStartLoop:
         assert loop._total_sent == 5
         assert channel.removed_flags == [selectors.EVENT_WRITE]
 
+    def test_start_does_not_send_pending_chunks_before_ssl_handshake_complete(self, loop):
+        channel = FakeChannel(
+            100,
+            sock=FakeSslSocket(100, handshake_results=[ssl.SSLWantReadError()]),
+            ssl_handshake=True,
+        )
+        chunk = Chunk(b"abc")
+        channel._pendings = [chunk]
+        channel._pending_bytes = 3
+        channel._flag = selectors.EVENT_READ | selectors.EVENT_WRITE
+        loop._channels[100] = channel
+
+        self.run_start_once(loop, [(selector_key(channel), selectors.EVENT_WRITE)])
+
+        assert channel.socket().handshake_calls == 1
+        assert channel.pendings() == [chunk]
+        assert chunk.future.done() is False
+        assert loop._total_sent == 0
+        assert channel.events == []
+        assert channel.removed_flags == [selectors.EVENT_WRITE]
+
     def test_start_keeps_partially_sent_chunk_pending(self, loop):
         channel = FakeChannel(100)
         chunk = Chunk(b"abc")
@@ -779,7 +910,7 @@ class TestStartLoop:
 
         assert loop._total_received == 0
         assert channel.socket().closed is False
-        assert channel.events == []
+        assert channel.events == [("active", True, "first time to be active")]
 
     def test_start_closes_on_read_eof(self, loop):
         channel = FakeChannel(100)

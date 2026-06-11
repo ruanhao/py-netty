@@ -4,6 +4,7 @@ import itertools
 import selectors
 import logging
 import socket
+import ssl
 import threading
 from .eventfd import eventfd
 from concurrent.futures import ThreadPoolExecutor
@@ -275,7 +276,62 @@ class EventLoop:
         for fd in to_delete:
             self._connect_timeout_due_millis.pop(fd, None)
 
+    def _activate_channel(self, channel: AbstractChannel, reason: str):
+        channel.set_active(True, reason)
+        channel.channel_future().set(channel)
+        self._connect_timeout_due_millis.pop(channel.fileno(), None)
+
+    def _set_ssl_handshake_interest(self, channel: AbstractChannel, flag: int):
+        if flag == selectors.EVENT_READ:
+            channel.add_flag(selectors.EVENT_READ)
+            channel.remove_flag(selectors.EVENT_WRITE)
+        elif flag == selectors.EVENT_WRITE:
+            channel.add_flag(selectors.EVENT_WRITE)
+
+    def _complete_ssl_handshake(self, channel: AbstractChannel) -> bool:
+        """Drive one step of a non-blocking client-side TLS handshake.
+
+        ``SSLSocket.do_handshake()`` may complete immediately, or it may need
+        the underlying socket to become readable or writable before it can make
+        progress. ``SSLWantReadError`` and ``SSLWantWriteError`` are therefore
+        readiness signals, not failures; the selector interest is adjusted and
+        the caller must retry on the next matching event. Any other SSL/socket
+        error is fatal for the connection, so the connect future receives the
+        exception and the channel is closed.
+        """
+        try:
+            channel.socket().do_handshake()
+        except ssl.SSLWantReadError:
+            # ``SSLWantReadError`` means the TLS handshake needs to read more data from the socket, but the socket is not readable yet. We need to wait for the socket to become readable before retrying the handshake. This is a normal part of the non-blocking TLS handshake process, so we adjust the selector interest to wait for readability and return False to indicate that the handshake is not complete yet.
+            self._set_ssl_handshake_interest(channel, selectors.EVENT_READ)
+            return False
+        except ssl.SSLWantWriteError:
+            self._set_ssl_handshake_interest(channel, selectors.EVENT_WRITE)
+            return False
+        except (ssl.SSLError, OSError) as e:
+            channel.channel_future().set_exception(e)
+            self._connect_timeout_due_millis.pop(channel.fileno0(), None)
+            self._close_channel_internally(channel, reason=f'ssl handshake failed: {e}')
+            return False
+
+        channel.set_ssl_handshake_complete()
+        channel.handler_context().fire_channel_handshake_complete()
+        self._activate_channel(channel, 'ssl handshake complete')
+        if channel.has_pendings():
+            channel.add_flag(selectors.EVENT_WRITE)
+        return True
+
     def _check_channel_active(self, channel: AbstractChannel):
+        """Advance a connecting channel into the active state when possible.
+
+        Unlike ``channel.is_active()``, this method is not a passive state
+        check. It validates the completed non-blocking TCP connect with
+        ``SO_ERROR``, drives any pending client-side TLS handshake, fires the
+        relevant activation callbacks, and completes the connect future. It
+        returns ``False`` when the channel is not ready for application I/O yet
+        or when the connection failed; failures set the connect future exception
+        and close the channel.
+        """
         if channel._ever_active:
             return True
 
@@ -295,9 +351,10 @@ class EventLoop:
             self._close_channel_internally(channel, reason=f'connect failed: {exception}')
             return False
 
-        channel.set_active(True, 'first time to be active')
-        channel.channel_future().set(channel)
-        self._connect_timeout_due_millis.pop(channel.fileno(), None)
+        if channel.needs_ssl_handshake():
+            return self._complete_ssl_handshake(channel)
+
+        self._activate_channel(channel, 'first time to be active')
         return True
 
     @log(logger)
@@ -366,11 +423,13 @@ class EventLoop:
                     channel._check_writability()
 
                 if event & selectors.EVENT_READ and fileno in self._channels:
+                    if not channel.is_active() and not self._check_channel_active(channel):
+                        # if channel is not active yet, then check active
+                        # if channel cannot be set to active, like TLS handshake waiting for read/write or connection failed, then skip processing application data for this event.
+                        continue
                     buffer, eof = channel.recvall()
                     self._total_received += len(buffer)
                     if buffer:
-                        if not self._check_channel_active(channel):
-                            continue
                         # logger.info("receive: %s bytes: %s", len(buffer), buffer.decode('utf-8').replace('\n', '\\n'))
                         channel.handler_context().fire_channel_read(buffer)
                     elif eof:

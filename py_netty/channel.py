@@ -58,7 +58,7 @@ class AbstractChannel:
 
     _eventloop: 'EventLoop' = field()
     _socket: socket.socket = field()
-    _handler_initializer: Callable = field(factory=LoggingChannelHandler)
+    _handler_initializer: Callable = field(default=LoggingChannelHandler)
 
     def __attrs_post_init__(self):
         self._fileno = self._socket.fileno()
@@ -153,6 +153,22 @@ class AbstractChannel:
         """Returns True if this channel is related to a server listening socket, False otherwise."""
         return self._server_channel
 
+    def needs_ssl_handshake(self) -> bool:
+        return False
+
+    def manages_ssl_handshake(self) -> bool:
+        """Return whether TLS handshake ownership belongs to the event loop.
+
+        This is an ownership flag, not a progress check. It stays true for
+        client TLS channels whose handshake is driven by the event loop, even
+        after that handshake completes, so ``set_active()`` does not fall back
+        to the legacy synchronous SSL handshake path.
+        """
+        return False
+
+    def set_ssl_handshake_complete(self) -> None:
+        pass
+
     def fileno(self):
         return self._socket.fileno()
 
@@ -184,7 +200,7 @@ class AbstractChannel:
         if origin is False and active is True:
             self._ever_active = True
             self._refresh_sock_info()
-            if isinstance(self.socket(), ssl.SSLSocket):
+            if isinstance(self.socket(), ssl.SSLSocket) and not self.manages_ssl_handshake():
                 try:
                     s = time.perf_counter()
                     self.socket().do_handshake(True)
@@ -196,14 +212,8 @@ class AbstractChannel:
                     self.close(True)
                 except socket.error as socket_err:
                     logger.debug("ssl handshake error: %s", str(socket_err))
-                    # if errno.ENOTCONN is not socket_err.errno:
-                    #     logger.debug("ssl handshake error: %s", str(socket_err))
                 else:
                     self.handler_context().fire_channel_handshake_complete()
-                # finally:
-                #     with suppress(Exception):
-                #         self.socket().settimeout(0)
-
             self.handler_context().fire_channel_active()
 
     def close(self, force=False):
@@ -265,18 +275,30 @@ class AbstractChannel:
 
 class NioSocketChannel(AbstractChannel):
 
-    def __init__(self, eventloop: 'EventLoop', sock: socket.socket, handler_initializer: Callable, connect_timeout_millis: int = 3000):
+    def __init__(self, eventloop: 'EventLoop', sock: socket.socket, handler_initializer: Callable, connect_timeout_millis: int = 3000, ssl_handshake: bool = False):
         super().__init__(eventloop, sock, handler_initializer)
         self._pendings = []     # [Chunk, ...]
         self._pending_bytes = 0
         self._writable = True
         self._auto_read = True
+        self._ssl_handshake_required = ssl_handshake and isinstance(sock, ssl.SSLSocket)
+        self._ssl_handshake_complete = not self._ssl_handshake_required
         try:
             self.socket().setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except Exception:
             # (Windows) OSError: [WinError 10022] An invalid argument was supplied
             pass
         self._connect_timeout_millis = connect_timeout_millis
+
+    def needs_ssl_handshake(self) -> bool:
+        return self._ssl_handshake_required and not self._ssl_handshake_complete
+
+    def manages_ssl_handshake(self) -> bool:
+        """Return True for client TLS channels managed by the event loop."""
+        return self._ssl_handshake_required
+
+    def set_ssl_handshake_complete(self) -> None:
+        self._ssl_handshake_complete = True
 
     def is_writable(self) -> bool:
         return self._writable
