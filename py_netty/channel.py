@@ -295,6 +295,16 @@ class NioSocketChannel(AbstractChannel):
     def set_pendings(self, pendings: List['Chunk']):
         self._pendings = pendings
 
+    def fail_pendings(self, exception: Exception) -> None:
+        for chunk in self._pendings:
+            if chunk.close and chunk.future is self.close_future().future:
+                continue
+            if not chunk.future.done():
+                chunk.future.set_exception(exception)
+        self._pendings = []
+        self._pending_bytes = 0
+        self._check_writability()
+
     def add_pending(self, chunk: 'Chunk'):
         if chunk is None:
             return

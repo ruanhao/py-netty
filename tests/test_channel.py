@@ -451,6 +451,21 @@ class TestNioSocketChannel:
         assert channel.pendings()[0].buffer == b"payload"
         assert channel.pendings()[0].future is future.future
 
+    def test_fail_pendings_sets_exception_and_resets_state(self):
+        channel = make_channel()
+        write_chunk = Chunk(b"payload")
+        close_chunk = Chunk(EMPTY_BUFFER, channel.close_future().future, True)
+        channel._pendings = [write_chunk, close_chunk]
+        channel._pending_bytes = len(write_chunk.buffer)
+
+        channel.fail_pendings(RuntimeError("closed"))
+
+        with pytest.raises(RuntimeError, match="closed"):
+            write_chunk.future.result()
+        assert channel.close_future().done() is False
+        assert channel.pendings() == []
+        assert channel._pending_bytes == 0
+
     def test_set_auto_read_toggles_read_flag(self):
         eventloop = FakeEventLoop()
         channel = make_channel(eventloop)

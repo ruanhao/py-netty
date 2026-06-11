@@ -20,6 +20,7 @@ class FakeEventFD:
         self._fileno = fileno
         self.writes = []
         self.reads = 0
+        self.closed = False
 
     def fileno(self):
         return self._fileno
@@ -29,6 +30,9 @@ class FakeEventFD:
 
     def unsafe_read(self):
         self.reads += 1
+
+    def close(self):
+        self.closed = True
 
 
 class FakeSelector:
@@ -243,6 +247,13 @@ class FakeChannel:
     def set_pendings(self, pendings):
         self._pendings = pendings
 
+    def fail_pendings(self, exception):
+        for chunk in self._pendings:
+            if not chunk.future.done():
+                chunk.future.set_exception(exception)
+        self._pendings = []
+        self._pending_bytes = 0
+
     def try_send(self, buffer):
         if self.try_send_results:
             return self.try_send_results.pop(0)
@@ -312,6 +323,21 @@ class TestEventLoopBasics:
 
         assert loop._stop_polling is True
         assert loop._eventfd.writes == [True]
+
+    def test_stop_before_start_closes_resources(self, monkeypatch):
+        eventfd = FakeEventFD()
+        selector = FakeSelector()
+        monkeypatch.setattr(eventloop_module, "eventfd", lambda: eventfd)
+        monkeypatch.setattr(eventloop_module.selectors, "DefaultSelector", lambda: selector)
+        eventloop = EventLoop(FakePool())
+
+        eventloop.stop()
+        eventloop.stop()
+
+        assert eventloop._stop_polling is True
+        assert eventloop._closed is True
+        assert selector.closed is True
+        assert eventfd.closed is True
 
 
 class TestModifyFlag:
@@ -509,6 +535,7 @@ class TestTaskQueueAndHelpers:
     def test_close_channel_internally_closes_and_unregisters(self, loop):
         enter_loop(loop)
         channel = FakeChannel()
+        loop._channels[channel.fileno0()] = channel
 
         loop._close_channel_internally(channel, "done")
 
@@ -516,6 +543,24 @@ class TestTaskQueueAndHelpers:
         assert channel.close_future().done() is True
         assert channel.events == [("active", False, "done")]
         assert channel.unregister_calls == 1
+        assert channel.fileno0() not in loop._channels
+
+    def test_close_channel_internally_fails_pending_work(self, loop):
+        enter_loop(loop)
+        channel = FakeChannel()
+        pending = Chunk(b"abc")
+        channel._pendings = [pending]
+        channel._pending_bytes = 3
+        loop._channels[channel.fileno0()] = channel
+
+        loop._close_channel_internally(channel, "shutdown")
+
+        with pytest.raises(RuntimeError, match="channel closed: shutdown"):
+            channel.channel_future().sync()
+        with pytest.raises(RuntimeError, match="channel closed: shutdown"):
+            pending.future.result()
+        assert channel.pendings() == []
+        assert channel._pending_bytes == 0
 
     def test_events_to_str_formats_eventfd_known_and_unknown_channels(self, loop):
         client = FakeChannel(100)
@@ -790,6 +835,7 @@ class TestStartLoop:
         assert loop._eventfd.reads == 1
         assert loop._eventfd_read_count == 1
         assert loop._selector.closed is True
+        assert loop._eventfd.closed is True
 
     def test_start_accepts_server_connections(self, loop):
         server = FakeChannel(100, server=True)
@@ -814,7 +860,8 @@ class TestStartLoop:
 
         self.run_start_once(loop, [(selector_key(server), selectors.EVENT_READ)])
 
-        assert server.events == [("read", server.accept_results[0][0])]
+        assert server.events[0] == ("read", server.accept_results[0][0])
+        assert server.events[-1] == ("active", False, "event loop stopped")
 
     def test_start_removes_write_flag_when_client_has_no_pending(self, loop):
         channel = FakeChannel(100)
@@ -857,10 +904,11 @@ class TestStartLoop:
         self.run_start_once(loop, [(selector_key(channel), selectors.EVENT_WRITE)])
 
         assert channel.socket().handshake_calls == 1
-        assert channel.pendings() == [chunk]
-        assert chunk.future.done() is False
+        assert channel.pendings() == []
+        with pytest.raises(RuntimeError, match="channel closed: event loop stopped"):
+            chunk.future.result()
         assert loop._total_sent == 0
-        assert channel.events == []
+        assert channel.events == [("active", False, "event loop stopped")]
         assert channel.removed_flags == [selectors.EVENT_WRITE]
 
     def test_start_keeps_partially_sent_chunk_pending(self, loop):
@@ -873,10 +921,11 @@ class TestStartLoop:
 
         self.run_start_once(loop, [(selector_key(channel), selectors.EVENT_WRITE)])
 
-        assert chunk.future.done() is False
-        assert channel.pendings() == [chunk]
+        with pytest.raises(RuntimeError, match="channel closed: event loop stopped"):
+            chunk.future.result()
+        assert channel.pendings() == []
         assert chunk.buffer == b"bc"
-        assert channel._pending_bytes == 2
+        assert channel._pending_bytes == 0
         assert loop._total_sent == 1
         assert channel.removed_flags == []
 
@@ -899,7 +948,8 @@ class TestStartLoop:
         self.run_start_once(loop, [(selector_key(channel), selectors.EVENT_READ)])
 
         assert loop._total_received == 5
-        assert channel.events[-1] == ("read", b"hello")
+        assert ("read", b"hello") in channel.events
+        assert channel.events[-1] == ("active", False, "event loop stopped")
 
     def test_start_ignores_empty_read_without_eof(self, loop):
         channel = FakeChannel(100)
@@ -909,8 +959,11 @@ class TestStartLoop:
         self.run_start_once(loop, [(selector_key(channel), selectors.EVENT_READ)])
 
         assert loop._total_received == 0
-        assert channel.socket().closed is False
-        assert channel.events == [("active", True, "first time to be active")]
+        assert channel.socket().closed is True
+        assert channel.events == [
+            ("active", True, "first time to be active"),
+            ("active", False, "event loop stopped"),
+        ]
 
     def test_start_closes_on_read_eof(self, loop):
         channel = FakeChannel(100)

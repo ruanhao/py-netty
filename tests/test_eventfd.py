@@ -84,3 +84,12 @@ def test_eventfd_factory_uses_platform_specific_implementation():
         assert isinstance(event, SocketEventFD)
     else:
         assert isinstance(event, PipeEventFD)
+
+
+def test_eventfd_close_is_idempotent():
+    event = eventfd()
+
+    event.close()
+    event.close()
+
+    assert event.fileno() == -1

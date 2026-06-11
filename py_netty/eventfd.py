@@ -22,6 +22,7 @@ class BaseEventFD(object):
         self._write_fd = None
         self._unsafe_counts = 0
         self._lock = Lock()
+        self._closed = False
 
     def _read(self, len):
         return os.read(self._read_fd, len)
@@ -46,12 +47,16 @@ class BaseEventFD(object):
 
     def unsafe_write(self):
         with self._lock:
+            if self._closed:
+                return
             if self._unsafe_counts > 0:
                 return
             self._write(self._DATA)
             self._unsafe_counts += 1
 
     def unsafe_read(self):
+        if self._closed:
+            return
         self._read(len(self._DATA))
         with self._lock:
             self._unsafe_counts -= 1
@@ -94,11 +99,26 @@ class BaseEventFD(object):
 
         Reference: https://docs.python.org/3/library/select.html#select.select
         """
+        if self._read_fd is None:
+            return -1
         return self._read_fd
+
+    def close(self):
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._close()
+
+    def _close(self):
+        raise NotImplementedError
 
     def __del__(self):
         """Closes the file descriptors"""
-        raise NotImplementedError
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 class PipeEventFD(BaseEventFD):
@@ -109,9 +129,16 @@ class PipeEventFD(BaseEventFD):
         super(PipeEventFD, self).__init__()
         self._read_fd, self._write_fd = os.pipe()
 
-    def __del__(self):
-        os.close(self._read_fd)
-        os.close(self._write_fd)
+    def _close(self):
+        for fd_name in ("_read_fd", "_write_fd"):
+            fd = getattr(self, fd_name)
+            if fd is None:
+                continue
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            setattr(self, fd_name, None)
 
 
 class SocketEventFD(BaseEventFD):
@@ -134,11 +161,20 @@ class SocketEventFD(BaseEventFD):
         self._write_fd.send(data)
 
     def fileno(self):
+        if self._read_fd is None:
+            return -1
         return self._read_fd.fileno()
 
-    def __del__(self):
-        self._read_fd.close()
-        self._write_fd.close()
+    def _close(self):
+        for fd_name in ("_read_fd", "_write_fd"):
+            sock = getattr(self, fd_name)
+            if sock is None:
+                continue
+            try:
+                sock.close()
+            except OSError:
+                pass
+            setattr(self, fd_name, None)
 
 
 def eventfd():

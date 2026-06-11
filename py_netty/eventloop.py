@@ -30,6 +30,7 @@ class EventLoop:
         self._connect_timeout_due_millis = {}  # {fileno: due_millis}
         self._thread = None
         self._stop_polling = False
+        self._closed = False
         self._start_barrier = threading.Event()
         self._lock = threading.Lock()
         self._pool = pool
@@ -75,6 +76,8 @@ class EventLoop:
             self._selector.modify(fileno, flag)
 
     def submit_task(self, task):
+        if self._stop_polling or self._closed:
+            raise RuntimeError("event loop is stopping")
         self.start()
         self._taskq.put(task)
         self._total_tasks_submitted += 1
@@ -82,8 +85,13 @@ class EventLoop:
 
     def interrupt(self, desc=""):
         if desc and logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"interrupting eventloop with EventFD {hex(id(self._eventfd))} in {self._thread.name}: {desc}")
-        self._eventfd.unsafe_write()
+            thread_name = self._thread.name if self._thread else "not-started"
+            logger.debug(f"interrupting eventloop with EventFD {hex(id(self._eventfd))} in {thread_name}: {desc}")
+        try:
+            self._eventfd.unsafe_write()
+        except Exception:
+            logger.exception("failed to interrupt event loop")
+            return
 
         if not logger.isEnabledFor(logging.DEBUG):
             return
@@ -102,8 +110,8 @@ class EventLoop:
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("unregistered channel %s/%s from selector", channel.id(), fileno)
             channel.handler_context().fire_channel_unregistered()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("channel %s/%s was not unregistered cleanly: %s", channel.id(), fileno, e)
         self._channels.pop(fileno, None)
         self._connect_timeout_due_millis.pop(fileno, None)
         cf.set(channel)
@@ -145,7 +153,12 @@ class EventLoop:
 
     def stop(self):
         logger.debug("stopping poll")
+        if self._closed or self._stop_polling:
+            return
         self._stop_polling = True
+        if not self._start_barrier.is_set():
+            self._cleanup_resources('event loop stopped before start')
+            return
         self.interrupt('stop poll')
 
     def _process_task_queue(self):
@@ -162,13 +175,66 @@ class EventLoop:
                 logger.debug("task finished in %sms: \n%s", int((time.time() - start) * 1000), inspect.getsource(task))
             self._total_tasks_processed += 1
 
-    def _close_channel_internally(self, channel, reason=''):
+    def _fail_channel_work(self, channel, exception):
+        channel_future = channel.channel_future()
+        if channel_future and not channel_future.done():
+            channel_future.set_exception(exception)
+
+        fail_pendings = getattr(channel, 'fail_pendings', None)
+        if fail_pendings:
+            fail_pendings(exception)
+
+    def _close_channel_internally(self, channel, reason='', exception=None):
         assert self.in_eventloop(), "Must be in event loop"
         logger.debug(f"closing channel internally (reason: {reason}): {channel}")
-        channel.socket().close()
+        exception = exception or RuntimeError(f"channel closed: {reason or 'unknown reason'}")
+        self._fail_channel_work(channel, exception)
+        try:
+            channel.socket().close()
+        except Exception:
+            logger.exception("error while closing channel socket: %s", channel)
         channel.close_future().set(channel)
         channel.set_active(False, reason)
         channel.unregister()
+        self._channels.pop(channel.fileno0(), None)
+        self._connect_timeout_due_millis.pop(channel.fileno0(), None)
+
+    def _cleanup_resources(self, reason='event loop stopped'):
+        if self._closed:
+            return
+        self._closed = True
+
+        for channel in list(self._channels.values()):
+            try:
+                if self.in_eventloop():
+                    self._close_channel_internally(channel, reason)
+                else:
+                    self._fail_channel_work(channel, RuntimeError(f"channel closed: {reason}"))
+                    channel.socket().close()
+                    channel.close_future().set(channel)
+                    channel.set_active(False, reason)
+                    fileno = channel.fileno0()
+                    try:
+                        self._selector.unregister(fileno)
+                        channel.handler_context().fire_channel_unregistered()
+                    except Exception as e:
+                        logger.debug("channel %s/%s was not unregistered cleanly: %s", channel.id(), fileno, e)
+                    self._channels.pop(fileno, None)
+                    self._connect_timeout_due_millis.pop(fileno, None)
+            except Exception:
+                logger.exception("error while closing channel during event loop cleanup: %s", channel)
+
+        try:
+            self._selector.close()
+        except Exception:
+            logger.exception("error while closing selector")
+
+        close_eventfd = getattr(self._eventfd, 'close', None)
+        if close_eventfd:
+            try:
+                close_eventfd()
+            except Exception:
+                logger.exception("error while closing eventfd")
 
     def _events_to_str(self, events: List[Tuple[selectors.SelectorKey, int]]):
         result = []
@@ -364,7 +430,7 @@ class EventLoop:
         logger.debug(f"eventloop (EventFD:{hex(id(self._eventfd))}) started in thread: {self._thread.name}")
         while True:
             if self._stop_polling:
-                self._selector.close()
+                self._cleanup_resources('event loop stopped')
                 logger.debug(f"eventloop (EventFD:{hex(id(self._eventfd))}) closed in thread: {self._thread.name}")
                 return
 
@@ -440,9 +506,13 @@ class EventLoop:
             self._process_connection_timeout()
 
     def start(self):
+        if self._stop_polling or self._closed:
+            raise RuntimeError("event loop is stopping")
         if self._start_barrier.is_set():
             return
         with self._lock:
+            if self._stop_polling or self._closed:
+                raise RuntimeError("event loop is stopping")
             if self._start_barrier.is_set():
                 return
             self._pool.submit(self._start)
