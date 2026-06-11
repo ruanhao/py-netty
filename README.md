@@ -265,9 +265,3 @@ failures, or timeouts.
 ### Connection Ramp-up
 
 ![echo connection ramp-up comparison](img/perf_echo_ramp_up.png)
-
-## Caveats
-
-- No pipeline, supports only one handler FOR NOW
-- No batteries-included codecs FOR NOW
-- No pool or refcnt for bytes buffer, bytes objects are created and consumed at your disposal
