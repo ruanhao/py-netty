@@ -357,7 +357,8 @@ class NioSocketChannel(AbstractChannel):
     def recvall(self) -> (bytes, bool):
         # if isinstance(self.socket(), ssl.SSLSocket):
         #     return self.recvall_ssl()
-        buffer = b''
+        buffers = []
+        total_received = 0
         bufsize = _INITIAL_BUFFER_SIZE
         rounds = 0
         total_costs = 0
@@ -369,17 +370,18 @@ class NioSocketChannel(AbstractChannel):
                 cost = time.perf_counter() - s  # seconds
                 total_costs += cost
                 if not received:  # EOF
-                    return buffer, True
+                    return b''.join(buffers), True
                 recv_len = len(received)
                 bufsize = adaptive_bufsize(bufsize, recv_len)
-                buffer += received
+                buffers.append(received)
+                total_received += recv_len
                 if rounds == _ROUNDS or total_costs > 0.1 or cost > 0.01:
                     if logger.isEnabledFor(logging.DEBUG):
                         cost = round(cost, 3)
                         total_costs = round(total_costs, 3)
                         sock_info = sockinfo(self.socket())
-                        logger.debug(f"yield from recvall, rounds:{rounds}, current cost:{cost * 1000}ms, total cost:{total_costs * 1000}ms, bufsize:{bufsize}, buffer: {len(buffer)}, socket:{sock_info}")
-                    return buffer, False
+                        logger.debug(f"yield from recvall, rounds:{rounds}, current cost:{cost * 1000}ms, total cost:{total_costs * 1000}ms, bufsize:{bufsize}, buffer: {total_received}, socket:{sock_info}")
+                    return b''.join(buffers), False
             # except ssl.SSLWantReadError:  # for ssl socket
             #     logger.debug("recvall ssl.SSLWantReadError, readable: %s", self.is_readable())
             #     if self.is_readable():
@@ -390,7 +392,7 @@ class NioSocketChannel(AbstractChannel):
                     logger.debug("recvall socket.error: %s, readable: %s", str(socket_err), self.is_readable())
                 if self.is_readable():
                     continue
-                return buffer, socket_err.errno in (errno.ECONNABORTED, errno.ECONNRESET)
+                return b''.join(buffers), socket_err.errno in (errno.ECONNABORTED, errno.ECONNRESET)
 
     def is_readable(self) -> bool:
         try:
