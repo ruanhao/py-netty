@@ -367,11 +367,9 @@ class TestServerBootstrapBind:
         assert parent_group.calls == 1
         assert child_group.calls == 0
 
-    def test_bind_tls_wraps_socket_and_logs_callback_error(self, monkeypatch, caplog):
+    def test_bind_tls_configures_plain_listener_and_logs_callback_error(self, monkeypatch, caplog):
         raw_socket = FakeSocket("server")
-        wrapped_socket = FakeSocket("wrapped-server")
         ssl_ctx = FakeSslContext()
-        ssl_ctx.next_socket = wrapped_socket
         parent_group, child_group = self.patch_bind_dependencies(monkeypatch, raw_socket)
         monkeypatch.setattr(bootstrap_module, "_server_ssl_context", lambda certfile, keyfile: ssl_ctx)
 
@@ -390,12 +388,12 @@ class TestServerBootstrapBind:
         bootstrap.bind(address="0.0.0.0", port=8443)
 
         assert "Error in ssl_context_cb(server): bad server callback" in caplog.text
-        assert ssl_ctx.wrapped == [(raw_socket, {"server_side": True})]
-        assert wrapped_socket.sockopts == [
+        assert ssl_ctx.wrapped == []
+        assert raw_socket.sockopts == [
             (bootstrap_module.socket.SOL_SOCKET, bootstrap_module.socket.SO_REUSEADDR, 1)
         ]
-        assert wrapped_socket.bound == [("0.0.0.0", 8443)]
-        assert FakeNioServerSocketChannel.instances[-1].sock is wrapped_socket
+        assert raw_socket.bound == [("0.0.0.0", 8443)]
+        assert FakeNioServerSocketChannel.instances[-1].sock is raw_socket
 
     def test_bind_tls_runs_successful_callback(self, monkeypatch):
         raw_socket = FakeSocket("server")
@@ -415,11 +413,9 @@ class TestServerBootstrapBind:
 
         assert calls == [ssl_ctx]
 
-    def test_bind_tls_without_callback_still_wraps_socket(self, monkeypatch):
+    def test_bind_tls_without_callback_keeps_listener_plain(self, monkeypatch):
         raw_socket = FakeSocket("server")
-        wrapped_socket = FakeSocket("wrapped-server")
         ssl_ctx = FakeSslContext()
-        ssl_ctx.next_socket = wrapped_socket
         parent_group, child_group = self.patch_bind_dependencies(monkeypatch, raw_socket)
         monkeypatch.setattr(bootstrap_module, "_server_ssl_context", lambda certfile, keyfile: ssl_ctx)
         bootstrap = ServerBootstrap(
@@ -431,8 +427,8 @@ class TestServerBootstrapBind:
 
         bootstrap.bind(port=8443)
 
-        assert ssl_ctx.wrapped == [(raw_socket, {"server_side": True})]
-        assert FakeNioServerSocketChannel.instances[-1].sock is wrapped_socket
+        assert ssl_ctx.wrapped == []
+        assert FakeNioServerSocketChannel.instances[-1].sock is raw_socket
 
     def test_server_initializer_registers_accepted_client_socket(self, monkeypatch):
         server_socket = FakeSocket("server")
@@ -454,5 +450,39 @@ class TestServerBootstrapBind:
         assert client_channel.eventloop == "child-loop"
         assert client_channel.sock is client_socket
         assert client_channel.handler_initializer is child_handler_initializer
+        assert client_channel.ssl_handshake is False
+        assert client_channel.registered is True
+        assert child_group.calls == 1
+
+    def test_server_initializer_wraps_tls_client_socket_after_accept(self, monkeypatch):
+        server_socket = FakeSocket("server")
+        client_socket = FakeSocket("client")
+        wrapped_client_socket = FakeSocket("wrapped-client")
+        ssl_ctx = FakeSslContext()
+        ssl_ctx.next_socket = wrapped_client_socket
+        parent_group, child_group = self.patch_bind_dependencies(monkeypatch, server_socket)
+        child_handler_initializer = object()
+        monkeypatch.setattr(bootstrap_module, "_server_ssl_context", lambda certfile, keyfile: ssl_ctx)
+        bootstrap = ServerBootstrap(
+            parent_group=parent_group,
+            child_group=child_group,
+            child_handler_initializer=child_handler_initializer,
+            certfile="cert.pem",
+            keyfile="key.pem",
+        )
+        bootstrap.bind(port=8443)
+
+        initializer_cls = FakeNioServerSocketChannel.instances[-1].handler_initializer
+        initializer_cls().channel_read(None, client_socket)
+
+        client_channel = FakeNioSocketChannel.instances[-1]
+        assert client_socket.blocking_values == [0]
+        assert ssl_ctx.wrapped == [
+            (client_socket, {"server_side": True, "do_handshake_on_connect": False})
+        ]
+        assert client_channel.eventloop == "child-loop"
+        assert client_channel.sock is wrapped_client_socket
+        assert client_channel.handler_initializer is child_handler_initializer
+        assert client_channel.ssl_handshake is True
         assert client_channel.registered is True
         assert child_group.calls == 1

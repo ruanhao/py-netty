@@ -95,6 +95,7 @@ class ServerBootstrap:
         assert port > 0
         assert ((self.certfile is not None) ^ (self.keyfile is not None)) is False, "Both certfile and keyfile must be specified"
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        ssl_ctx = None
         if self.certfile and self.keyfile:
             ssl_ctx = _server_ssl_context(self.certfile, self.keyfile)
             if self.ssl_context_cb:
@@ -102,7 +103,6 @@ class ServerBootstrap:
                     self.ssl_context_cb(ssl_ctx)
                 except Exception as e:
                     logger.error("Error in ssl_context_cb(server): %s", e)
-            server_socket = ssl_ctx.wrap_socket(server_socket, server_side=True)
         server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_socket.bind((address, port))
         server_socket.listen(128)
@@ -113,10 +113,19 @@ class ServerBootstrap:
             def channel_read(this, ctx: ChannelContext, client_socket: socket.socket):
                 logger.debug("Initializing client socket: %s", client_socket)
                 client_socket.setblocking(0)
+                ssl_handshake = False
+                if ssl_ctx:
+                    client_socket = ssl_ctx.wrap_socket(
+                        client_socket,
+                        server_side=True,
+                        do_handshake_on_connect=False,
+                    )
+                    ssl_handshake = True
                 NioSocketChannel(
                     self.child_group.get_eventloop(),
                     client_socket,
-                    handler_initializer=self.child_handler_initializer
+                    handler_initializer=self.child_handler_initializer,
+                    ssl_handshake=ssl_handshake,
                 ).register()
 
         return NioServerSocketChannel(eventloop, server_socket, handler_initializer=_ChannelInitializer).register()
