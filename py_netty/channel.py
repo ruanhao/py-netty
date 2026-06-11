@@ -59,6 +59,7 @@ class AbstractChannel:
     _eventloop: 'EventLoop' = field()
     _socket: socket.socket = field()
     _handler_initializer: Callable = field(default=LoggingChannelHandler)
+    _handler_context: 'ChannelHandlerContext' = field(default=None, init=False)
 
     def __attrs_post_init__(self):
         self._fileno = self._socket.fileno()
@@ -147,7 +148,9 @@ class AbstractChannel:
         return self._handler
 
     def handler_context(self) -> 'ChannelHandlerContext':
-        return ChannelHandlerContext(self)
+        if self._handler_context is None:
+            self._handler_context = ChannelHandlerContext(self)
+        return self._handler_context
 
     def is_server(self):
         """Returns True if this channel is related to a server listening socket, False otherwise."""

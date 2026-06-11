@@ -308,6 +308,11 @@ class TestAbstractChannelFlags:
         assert eventloop.registered == [channel]
         assert eventloop.unregistered == [channel]
 
+    def test_handler_context_is_cached_per_channel(self):
+        channel = make_channel()
+
+        assert channel.handler_context() is channel.handler_context()
+
     def test_add_flag_submits_task_when_not_in_eventloop(self):
         eventloop = FakeEventLoop(in_loop=False)
         channel = make_channel(eventloop)
