@@ -406,7 +406,8 @@ class NioSocketChannel(AbstractChannel):
 
     def is_readable(self) -> bool:
         try:
-            return not self.socket().recv(16, socket.MSG_DONTWAIT | socket.MSG_PEEK) == b''
+            flags = socket.MSG_PEEK | getattr(socket, "MSG_DONTWAIT", 0)
+            return not self.socket().recv(16, flags) == b''
         except Exception:
             return False
 
