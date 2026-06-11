@@ -592,6 +592,33 @@ class TestNioSocketChannel:
         assert channel.pendings()[0].buffer == b"payload"
         assert channel.pendings()[0].future is future.future
 
+    def test_write_sends_immediately_when_active_with_no_pending_data(self):
+        sock = FakeSocket(send_results=[7])
+        channel = make_channel(sock=sock)
+        channel.set_active(True)
+
+        future = channel.write(b"payload")
+
+        assert future.done() is True
+        assert future.future.result() is True
+        assert channel.pendings() == []
+        assert sock.sent == [b"payload"]
+
+    def test_write_queues_only_unsent_bytes_after_partial_immediate_send(self):
+        error = OSError(errno.EAGAIN, "try again")
+        sock = FakeSocket(send_results=[3, error, error])
+        channel = make_channel(sock=sock)
+        channel.set_active(True)
+
+        future = channel.write(b"payload")
+
+        assert future.done() is False
+        assert len(channel.pendings()) == 1
+        assert channel.pendings()[0].buffer == b"load"
+        assert channel.pendings()[0].future is future.future
+        assert channel._pending_bytes == 4
+        assert sock.sent == [b"payload", b"load", b"load"]
+
     def test_write_submits_task_when_called_outside_eventloop(self):
         eventloop = FakeEventLoop(in_loop=False)
         channel = make_channel(eventloop)

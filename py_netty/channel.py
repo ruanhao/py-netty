@@ -335,6 +335,13 @@ class NioSocketChannel(AbstractChannel):
         if not self.in_eventloop():
             self._eventloop.submit_task(lambda: self.write(buffer, cf))
             return cf
+        if self.is_active() and not self.has_pendings():
+            remaining = self.try_send(buffer)
+            if not remaining:
+                cf.future.set_result(True)
+                return cf
+            self.add_pending(Chunk(remaining, cf.future))
+            return cf
         self.add_pending(Chunk(buffer, cf.future))
         return cf
 
