@@ -156,16 +156,6 @@ class AbstractChannel:
     def needs_ssl_handshake(self) -> bool:
         return False
 
-    def manages_ssl_handshake(self) -> bool:
-        """Return whether TLS handshake ownership belongs to the event loop.
-
-        This is an ownership flag, not a progress check. It stays true for
-        client TLS channels whose handshake is driven by the event loop, even
-        after that handshake completes, so ``set_active()`` does not fall back
-        to the legacy synchronous SSL handshake path.
-        """
-        return False
-
     def set_ssl_handshake_complete(self) -> None:
         pass
 
@@ -200,20 +190,6 @@ class AbstractChannel:
         if origin is False and active is True:
             self._ever_active = True
             self._refresh_sock_info()
-            if isinstance(self.socket(), ssl.SSLSocket) and not self.manages_ssl_handshake():
-                try:
-                    s = time.perf_counter()
-                    self.socket().do_handshake(True)
-                    cost = time.perf_counter() - s  # seconds
-                    if cost > 1:
-                        logger.warning("ssl handshake cost: ~%ss", round(cost, 2))
-                except socket.timeout:
-                    logger.exception("ssl handshake timeout")
-                    self.close(True)
-                except socket.error as socket_err:
-                    logger.debug("ssl handshake error: %s", str(socket_err))
-                else:
-                    self.handler_context().fire_channel_handshake_complete()
             self.handler_context().fire_channel_active()
 
     def close(self, force=False):
@@ -292,10 +268,6 @@ class NioSocketChannel(AbstractChannel):
 
     def needs_ssl_handshake(self) -> bool:
         return self._ssl_handshake_required and not self._ssl_handshake_complete
-
-    def manages_ssl_handshake(self) -> bool:
-        """Return True for client TLS channels managed by the event loop."""
-        return self._ssl_handshake_required
 
     def set_ssl_handshake_complete(self) -> None:
         self._ssl_handshake_complete = True
