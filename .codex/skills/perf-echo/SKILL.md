@@ -34,6 +34,13 @@ Useful smoke command:
 python integration_tests/perf_echo.py --case single_connection_latency --messages 3 --payload-size 32 --timeout 5 --engine all
 ```
 
+Run against a separately deployed echo server:
+
+```bash
+python integration_tests/perf_echo.py --case single_connection_latency --messages 20 --payload-size 64 --timeout 5 --engine py-netty --port 19080
+python integration_tests/perf_echo.py --case single_connection_latency --messages 20 --payload-size 64 --timeout 5 --engine py-netty --host 10.0.0.5 --port 19080
+```
+
 Supported engines:
 
 - `py-netty`
@@ -61,9 +68,11 @@ starts losing ground.
 
 ## Test Principle
 
-Each case starts a local in-process echo server for the selected engine and
-creates matching clients. Clients send fixed-size framed payloads. The first
-8 bytes encode:
+By default, each case starts a local in-process echo server for the selected
+engine and creates matching clients. When `--port` is provided, the runner skips
+local server startup and connects clients to the separately deployed echo server
+at `--host` and `--port`; `--host` defaults to `127.0.0.1`. Clients send
+fixed-size framed payloads. The first 8 bytes encode:
 
 - `connection_id`
 - `sequence`
@@ -175,6 +184,13 @@ python integration_tests/perf_echo.py --help
 python integration_tests/perf_echo.py --case single_connection_latency --messages 3 --payload-size 32 --timeout 5 --engine all
 python integration_tests/perf_echo.py --case high_connection_scaling --engine threaded --connections 2 --messages 1 --payload-size 64 --timeout 5 --json
 pytest -q
+```
+
+When changing external echo server support, also validate `--port` against a
+running echo server. `--host` can be omitted for `127.0.0.1`:
+
+```bash
+python integration_tests/perf_echo.py --case single_connection_latency --messages 3 --payload-size 32 --timeout 5 --engine py-netty --port <external-echo-port>
 ```
 
 Validate chart files are readable and non-empty:

@@ -177,10 +177,11 @@ class MyChannelHandler(ChannelHandlerAdapter):
 ## Benchmark
 
 The current benchmark uses the local echo performance runner in
-`integration_tests/perf_echo.py`. Each case starts an in-process localhost echo
-server for the selected engine, sends framed payloads from matching clients,
-validates every echo, and reports throughput, message rate, latency, and
-connection ramp-up time.
+`integration_tests/perf_echo.py`. By default, each case starts an in-process
+localhost echo server for the selected engine. You can also provide `--port`
+with optional `--host` to run the same framed clients against a separately
+deployed echo server. The runner validates every echo and reports throughput,
+message rate, latency, and connection ramp-up time.
 
 The following results were collected locally with:
 

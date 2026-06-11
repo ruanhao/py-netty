@@ -1,18 +1,22 @@
 # perf_echo.py
 
-`perf_echo.py` is a standalone local performance runner for echo traffic. It can
+`perf_echo.py` is a standalone performance runner for echo traffic. It can
 run the same framed echo cases against py-netty, Python `asyncio`, and blocking
-sockets with one thread per connection (`threaded`). It starts an in-process
-local echo server for each selected engine, creates matching clients, sends
-fixed-size framed payloads, validates echoed responses, and prints performance
-metrics.
+sockets with one thread per connection (`threaded`). By default it starts an
+in-process local echo server for each selected engine. When `--port` is
+provided, it connects clients to that separately deployed echo server instead,
+using `127.0.0.1` as the default host unless `--host` is provided. In both modes
+it sends fixed-size framed payloads, validates echoed responses, and prints
+performance metrics.
 
 ## How It Works
 
-Each case starts a local echo server for the selected engine. The py-netty
-engine uses `ServerBootstrap` and `EchoChannelHandler`; the comparison engines
-use standard-library `asyncio` streams or blocking sockets. Every server echoes
-received bytes back to the client.
+Without `--port`, each case starts a local echo server for the selected engine.
+The py-netty engine uses `ServerBootstrap` and `EchoChannelHandler`; the
+comparison engines use standard-library `asyncio` streams or blocking sockets.
+With `--port`, the runner skips local server startup and treats the selected
+engine as the client implementation connecting to the external echo server.
+Every server must echo received bytes back to the client unchanged.
 
 Clients send fixed-size frames. The first 8 bytes are:
 
@@ -84,7 +88,7 @@ Run a larger throughput case:
 python integration_tests/perf_echo.py --case large_payload_throughput --connections 32 --messages 64
 ```
 
-Run a ramp-up case on an explicit local port:
+Run a ramp-up case against a separately deployed echo server:
 
 ```bash
 python integration_tests/perf_echo.py --case connection_ramp_up --port 19080 --connections 128

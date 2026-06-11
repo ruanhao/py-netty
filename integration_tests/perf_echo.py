@@ -15,7 +15,9 @@ Usage examples:
     # Run a larger throughput case with custom concurrency and message count.
     python integration_tests/perf_echo.py --case large_payload_throughput --connections 32 --messages 64
 
-    # Run a ramp-up case on an explicit localhost port.
+    # Run a ramp-up case against a separately deployed echo server.
+    # > go install github.com/wfscot/tcp-echo-server@latest
+    # > tcp-echo-server 9090
     python integration_tests/perf_echo.py --case connection_ramp_up --port 19080 --connections 128
 
     # Run higher connection-count cases to find where threaded sockets fall behind.
@@ -23,9 +25,9 @@ Usage examples:
 
 Notes:
     The runner starts an in-process localhost echo server for each case and
-    engine. Metrics are informational; the process exits non-zero only for
-    functional failures such as missing echoes, connection failures, or
-    timeouts.
+    engine unless --port points to a separately deployed echo server.
+    Metrics are informational; the process exits non-zero only for functional
+    failures such as missing echoes, connection failures, or timeouts.
 """
 import argparse
 import asyncio
@@ -57,7 +59,8 @@ USAGE_EXAMPLES = """examples:
   python integration_tests/perf_echo.py --case high_connection_scaling --engine all --timeout 30
 
 notes:
-  Each case starts an in-process localhost echo server for each selected engine.
+  Each case starts an in-process localhost echo server for each selected engine
+  unless --port points to a separately deployed echo server.
   Metrics are informational; only functional failures make the command fail.
 """
 
@@ -159,6 +162,14 @@ ALL_CASES = {
     **DEFAULT_CASES,
     **HIGH_CONNECTION_CASES,
 }
+
+LOCAL_ECHO_HOST = "127.0.0.1"
+
+
+@dataclass(frozen=True)
+class _EchoTarget:
+    host: str
+    port: int
 
 
 def _format_bytes_per_second(value: float) -> str:
@@ -404,7 +415,7 @@ def _apply_overrides(spec: CaseSpec, args: argparse.Namespace) -> CaseSpec:
     )
 
 
-def _run_py_netty_case(spec: CaseSpec, host: str, port: int, timeout: float) -> CaseResult:
+def _run_py_netty_case(spec: CaseSpec, host: Optional[str], port: Optional[int], timeout: float) -> CaseResult:
     if spec.payload_size < HEADER.size:
         raise ValueError(f"payload size must be at least {HEADER.size} bytes")
 
@@ -417,7 +428,13 @@ def _run_py_netty_case(spec: CaseSpec, host: str, port: int, timeout: float) -> 
     sent_messages = spec.connections * spec.messages
     sent_bytes = sent_messages * spec.payload_size
 
-    with _LocalEchoServer(host, port) as server:
+    server_context = (
+        contextlib.nullcontext(_EchoTarget(host, port))
+        if host is not None and port is not None
+        else _LocalEchoServer(LOCAL_ECHO_HOST, 0)
+    )
+
+    with server_context as server:
         case_started = time.perf_counter()
         with EventLoopGroup(spec.client_eventloops, f"perf-client-{spec.name}") as client_group:
             bootstrap = Bootstrap(eventloop_group=client_group)
@@ -516,15 +533,20 @@ async def _asyncio_client(state: _ClientState, reader: asyncio.StreamReader, wri
             await writer.wait_closed()
 
 
-async def _run_asyncio_case_async(spec: CaseSpec, host: str, port: int, timeout: float) -> CaseResult:
+async def _run_asyncio_case_async(spec: CaseSpec, host: Optional[str], port: Optional[int], timeout: float) -> CaseResult:
     if spec.payload_size < HEADER.size:
         raise ValueError(f"payload size must be at least {HEADER.size} bytes")
 
     run = _RunState(spec.connections)
     sent_messages = spec.connections * spec.messages
     sent_bytes = sent_messages * spec.payload_size
-    port = port or _choose_free_port(host)
-    server = await asyncio.start_server(_asyncio_echo_handler, host, port, reuse_address=True)
+    server = None
+    if host is not None and port is not None:
+        target = _EchoTarget(host, port)
+    else:
+        local_port = _choose_free_port(LOCAL_ECHO_HOST)
+        server = await asyncio.start_server(_asyncio_echo_handler, LOCAL_ECHO_HOST, local_port, reuse_address=True)
+        target = _EchoTarget(LOCAL_ECHO_HOST, local_port)
 
     try:
         case_started = time.perf_counter()
@@ -533,7 +555,7 @@ async def _run_asyncio_case_async(spec: CaseSpec, host: str, port: int, timeout:
             for i in range(spec.connections)
         ]
         connections = await asyncio.gather(
-            *(asyncio.open_connection(host, port) for _ in states),
+            *(asyncio.open_connection(target.host, target.port) for _ in states),
             return_exceptions=True,
         )
         active_connections: List[Tuple[_ClientState, asyncio.StreamReader, asyncio.StreamWriter]] = []
@@ -564,8 +586,9 @@ async def _run_asyncio_case_async(spec: CaseSpec, host: str, port: int, timeout:
 
         elapsed_seconds = time.perf_counter() - send_started
     finally:
-        server.close()
-        await server.wait_closed()
+        if server is not None:
+            server.close()
+            await server.wait_closed()
 
     return _build_result(
         "asyncio",
@@ -580,7 +603,7 @@ async def _run_asyncio_case_async(spec: CaseSpec, host: str, port: int, timeout:
     )
 
 
-def _run_asyncio_case(spec: CaseSpec, host: str, port: int, timeout: float) -> CaseResult:
+def _run_asyncio_case(spec: CaseSpec, host: Optional[str], port: Optional[int], timeout: float) -> CaseResult:
     return asyncio.run(_run_asyncio_case_async(spec, host, port, timeout))
 
 
@@ -685,7 +708,7 @@ def _threaded_client(state: _ClientState, sock: socket.socket) -> None:
         state.run.record_error(f"connection {state.connection_id}: {exc}")
 
 
-def _run_threaded_case(spec: CaseSpec, host: str, port: int, timeout: float) -> CaseResult:
+def _run_threaded_case(spec: CaseSpec, host: Optional[str], port: Optional[int], timeout: float) -> CaseResult:
     if spec.payload_size < HEADER.size:
         raise ValueError(f"payload size must be at least {HEADER.size} bytes")
 
@@ -693,7 +716,13 @@ def _run_threaded_case(spec: CaseSpec, host: str, port: int, timeout: float) -> 
     sent_messages = spec.connections * spec.messages
     sent_bytes = sent_messages * spec.payload_size
 
-    with _ThreadedEchoServer(host, port) as server:
+    server_context = (
+        contextlib.nullcontext(_EchoTarget(host, port))
+        if host is not None and port is not None
+        else _ThreadedEchoServer(LOCAL_ECHO_HOST, 0)
+    )
+
+    with server_context as server:
         states = [
             _ClientState(run, connection_id=i, messages=spec.messages, payload_size=spec.payload_size, sequential=spec.sequential)
             for i in range(spec.connections)
@@ -701,7 +730,7 @@ def _run_threaded_case(spec: CaseSpec, host: str, port: int, timeout: float) -> 
         case_started = time.perf_counter()
         with ThreadPoolExecutor(max_workers=spec.connections, thread_name_prefix=f"perf-threaded-{spec.name}") as pool:
             connect_futures = {
-                pool.submit(_threaded_connect, host, server.port, timeout): state
+                pool.submit(_threaded_connect, server.host, server.port, timeout): state
                 for state in states
             }
             active_connections: List[Tuple[_ClientState, socket.socket]] = []
@@ -744,7 +773,7 @@ def _run_threaded_case(spec: CaseSpec, host: str, port: int, timeout: float) -> 
     )
 
 
-def _run_case(spec: CaseSpec, engine: str, host: str, port: int, timeout: float) -> CaseResult:
+def _run_case(spec: CaseSpec, engine: str, host: Optional[str], port: Optional[int], timeout: float) -> CaseResult:
     if engine == "py-netty":
         return _run_py_netty_case(spec, host, port, timeout)
     if engine == "asyncio":
@@ -781,6 +810,7 @@ def _print_result(result: CaseResult) -> None:
 def _parse_args() -> argparse.Namespace:
     case_names = list(CASE_GROUPS) + list(ALL_CASES)
     engine_names = ["all", "py-netty", "asyncio", "threaded"]
+    host_provided = any(arg == "--host" or arg.startswith("--host=") for arg in sys.argv[1:])
     parser = argparse.ArgumentParser(
         description="Run local echo performance cases.",
         epilog=USAGE_EXAMPLES,
@@ -788,14 +818,28 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--case", choices=case_names, default="all")
     parser.add_argument("--engine", choices=engine_names, default="py-netty")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=0, help="Use 0 to auto-pick a free localhost port.")
+    parser.add_argument(
+        "--host",
+        default=LOCAL_ECHO_HOST,
+        help="Host of an already running echo server. Defaults to 127.0.0.1 when --port is provided.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port of an already running echo server. Omit to start an in-process local echo server.",
+    )
     parser.add_argument("--timeout", type=float, default=15.0)
     parser.add_argument("--connections", type=int, default=None)
     parser.add_argument("--messages", type=int, default=None)
     parser.add_argument("--payload-size", type=int, default=None)
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON results.")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if host_provided and args.port is None:
+        parser.error("--port is required when --host is provided.")
+    if args.port is not None and not 0 < args.port < 65536:
+        parser.error("--port must be between 1 and 65535.")
+    return args
 
 
 def main() -> int:
