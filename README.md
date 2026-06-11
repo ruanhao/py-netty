@@ -179,52 +179,62 @@ class MyChannelHandler(ChannelHandlerAdapter):
 
 ## Benchmark
 
-Test is performed using echo client/server mechanism on a 1-Core 2.0GHz Intel(R) Xeon(R) Platinum 8452Y with 4GB memory, Ubuntu 22.04.
-(Please see `bm_echo_server.py` for details.)
+The current benchmark uses the local echo performance runner in
+`integration_tests/perf_echo.py`. Each case starts an in-process localhost echo
+server for the selected engine, sends framed payloads from matching clients,
+validates every echo, and reports throughput, message rate, latency, and
+connection ramp-up time.
 
-3 methods are tested: 
-1. BIO (Traditional thread based blocking IO)
-2. Asyncio (Python built-in async IO)
-3. NIO (py-netty with 1 eventloop)
+The following results were collected locally with:
 
-3 metrics are collected:
-1. Throughput (of each connection) to indicate overall stability
-2. Average throughput (of all connections) to indicate overall performance
-3. Ramp up time (seconds consumed after all connections established) to indicate responsiveness
+```bash
+python integration_tests/perf_echo.py --case all --engine all --timeout 20 --json
+```
 
-### Case 1: Concurrent 64 connections with 32K/s 
-![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_32K_throughput.png)
-![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_32K_average.png)
-![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_32K_rampup.png)
+Environment: macOS 26.5 arm64, Python 3.12.10.
 
-### Case 2: Concurrent 64 connections with 4M/s 
-![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_4M_throughput.png)
-![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_4M_average.png)
-![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/64_concurrent_4M_rampup.png)
+| Case | Engine | Connections | Payload | Messages | Throughput | Message rate | p50 latency | p95 latency | Ramp-up |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `single_connection_latency` | `py-netty` | 1 | 64 B | 200 | 0.45 MiB/s | 7,359 msg/s | 0.12 ms | 0.20 ms | 0.46 ms |
+| `single_connection_latency` | `asyncio` | 1 | 64 B | 200 | 0.70 MiB/s | 11,516 msg/s | 0.07 ms | 0.13 ms | 0.35 ms |
+| `single_connection_latency` | `threaded` | 1 | 64 B | 200 | 1.43 MiB/s | 23,511 msg/s | 0.04 ms | 0.05 ms | 1.38 ms |
+| `backpressure_smoke` | `py-netty` | 8 | 64 KiB | 256 | 306.21 MiB/s | 4,899 msg/s | 42.11 ms | 47.05 ms | 6.89 ms |
+| `backpressure_smoke` | `asyncio` | 8 | 64 KiB | 256 | 817.40 MiB/s | 13,078 msg/s | 14.08 ms | 18.48 ms | 0.84 ms |
+| `backpressure_smoke` | `threaded` | 8 | 64 KiB | 256 | 812.25 MiB/s | 12,996 msg/s | 9.83 ms | 13.02 ms | 0.80 ms |
+| `large_payload_throughput` | `py-netty` | 16 | 64 KiB | 512 | 620.71 MiB/s | 9,931 msg/s | 37.45 ms | 47.49 ms | 3.01 ms |
+| `large_payload_throughput` | `asyncio` | 16 | 64 KiB | 512 | 751.79 MiB/s | 12,029 msg/s | 31.17 ms | 39.86 ms | 1.45 ms |
+| `large_payload_throughput` | `threaded` | 16 | 64 KiB | 512 | 785.02 MiB/s | 12,560 msg/s | 19.12 ms | 27.11 ms | 1.64 ms |
+| `small_payload_concurrency` | `py-netty` | 32 | 1 KiB | 6,400 | 49.05 MiB/s | 50,230 msg/s | 110.78 ms | 117.80 ms | 14.97 ms |
+| `small_payload_concurrency` | `asyncio` | 32 | 1 KiB | 6,400 | 77.80 MiB/s | 79,665 msg/s | 43.25 ms | 69.66 ms | 2.78 ms |
+| `small_payload_concurrency` | `threaded` | 32 | 1 KiB | 6,400 | 35.56 MiB/s | 36,416 msg/s | 88.69 ms | 117.45 ms | 2.39 ms |
+| `connection_ramp_up` | `py-netty` | 64 | 64 B | 64 | 0.93 MiB/s | 15,272 msg/s | 3.18 ms | 3.95 ms | 12.93 ms |
+| `connection_ramp_up` | `asyncio` | 64 | 64 B | 64 | 1.28 MiB/s | 20,967 msg/s | 1.44 ms | 1.60 ms | 5.02 ms |
+| `connection_ramp_up` | `threaded` | 64 | 64 B | 64 | 0.59 MiB/s | 9,691 msg/s | 2.71 ms | 5.48 ms | 4.18 ms |
 
-### Case 3: Concurrent 128 connections with 4M/s 
-![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_4M_throughput.png)
-![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_4M_average.png)
-![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_4M_rampup.png)
+Metrics are informational and environment-dependent. The comparison uses three
+local implementations: `py-netty`, Python `asyncio`, and blocking sockets with
+one thread per connection (`threaded`). The performance runner fails only on
+functional problems such as missing echoes, payload mismatches, connection
+failures, or timeouts.
 
-### Case 4: Concurrent 128 connections with 8M/s 
-![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_8M_throughput.png)
-![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_8M_average.png)
-![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/128_concurrent_8M_rampup.png)
+### Throughput
 
+![echo throughput comparison](img/perf_echo_throughput.png)
 
-### Case 5: Concurrent 256 connections with 8M/s 
-![Throughput](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/256_concurrent_8M_throughput.png)
-![Average Speed](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/256_concurrent_8M_average.png)
-![Ramp Up Time](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/256_concurrent_8M_rampup.png)
+### Message Rate
 
-### CPU Usage
-![32K/s](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/cpu_usage_32k.png)
-![2M/s](https://raw.githubusercontent.com/ruanhao/py-netty/master/img/cpu_usage_2m.png)
+![echo message rate comparison](img/perf_echo_message_rate.png)
+
+### Latency
+
+![echo latency comparison](img/perf_echo_latency.png)
+
+### Connection Ramp-up
+
+![echo connection ramp-up comparison](img/perf_echo_ramp_up.png)
 
 ## Caveats
 
 - No pipeline, supports only one handler FOR NOW
 - No batteries-included codecs FOR NOW
 - No pool or refcnt for bytes buffer, bytes objects are created and consumed at your disposal
-
