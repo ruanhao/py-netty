@@ -22,6 +22,12 @@ Primary command:
 python integration_tests/perf_echo.py --case all --engine all --timeout 20 --json
 ```
 
+High connection-count scaling command:
+
+```bash
+python integration_tests/perf_echo.py --case high_connection_scaling --engine all --timeout 30 --json
+```
+
 Useful smoke command:
 
 ```bash
@@ -42,7 +48,16 @@ Supported cases:
 - `large_payload_throughput`
 - `small_payload_concurrency`
 - `connection_ramp_up`
+- `high_connection_128`
+- `high_connection_256`
+- `high_connection_512`
+- `high_connection_scaling`
 - `all`
+
+`all` runs the default benchmark suite only. `high_connection_scaling` is a
+separate group for heavier local runs that stress 128, 256, and 512 concurrent
+connections to identify where the one-thread-per-connection `threaded` engine
+starts losing ground.
 
 ## Test Principle
 
@@ -73,6 +88,12 @@ raw data:
 
 ```bash
 python integration_tests/perf_echo.py --case all --engine all --timeout 20 --json > /tmp/py-netty-perf-compare.json
+```
+
+For high connection-count comparisons:
+
+```bash
+python integration_tests/perf_echo.py --case high_connection_scaling --engine all --timeout 30 --json > /tmp/py-netty-high-connections.json
 ```
 
 Before using the data, confirm every result has:
@@ -131,6 +152,14 @@ Keep the table ordered by connection count:
 4. `small_payload_concurrency`
 5. `connection_ramp_up`
 
+When documenting high connection-count scaling, keep those rows separate from
+the default benchmark table unless the user asks to replace the main benchmark
+data. Order them by connection count:
+
+1. `high_connection_128`
+2. `high_connection_256`
+3. `high_connection_512`
+
 For each case, list engines in this order:
 
 1. `py-netty`
@@ -144,6 +173,7 @@ Run these checks after modifying the benchmark runner, charts, or README:
 ```bash
 python integration_tests/perf_echo.py --help
 python integration_tests/perf_echo.py --case single_connection_latency --messages 3 --payload-size 32 --timeout 5 --engine all
+python integration_tests/perf_echo.py --case high_connection_scaling --engine threaded --connections 2 --messages 1 --payload-size 64 --timeout 5 --json
 pytest -q
 ```
 
@@ -170,3 +200,6 @@ PY
   claims.
 - If a high-connection case fails with `Too many open files`, lower
   `--connections` or raise the OS file descriptor limit before rerunning.
+- Do not run the full `high_connection_scaling` group as a casual smoke check;
+  use overrides such as `--connections 2 --messages 1` when validating CLI
+  behavior only.

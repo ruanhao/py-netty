@@ -189,27 +189,60 @@ The following results were collected locally with:
 
 ```bash
 python integration_tests/perf_echo.py --case all --engine all --timeout 20 --json
+python integration_tests/perf_echo.py --case high_connection_scaling --engine all --timeout 30 --json
 ```
 
 Environment: macOS 26.5 arm64, Python 3.12.10.
 
+The default suite covers latency, payload throughput, backpressure, and moderate
+concurrency. It is useful for comparing broad behavior, not for declaring one
+engine universally faster.
+
 | Case | Engine | Connections | Payload | Messages | Throughput | Message rate | p50 latency | p95 latency | Ramp-up |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `single_connection_latency` | `py-netty` | 1 | 64 B | 200 | 0.45 MiB/s | 7,359 msg/s | 0.12 ms | 0.20 ms | 0.46 ms |
-| `single_connection_latency` | `asyncio` | 1 | 64 B | 200 | 0.70 MiB/s | 11,516 msg/s | 0.07 ms | 0.13 ms | 0.35 ms |
-| `single_connection_latency` | `threaded` | 1 | 64 B | 200 | 1.43 MiB/s | 23,511 msg/s | 0.04 ms | 0.05 ms | 1.38 ms |
-| `backpressure_smoke` | `py-netty` | 8 | 64 KiB | 256 | 306.21 MiB/s | 4,899 msg/s | 42.11 ms | 47.05 ms | 6.89 ms |
-| `backpressure_smoke` | `asyncio` | 8 | 64 KiB | 256 | 817.40 MiB/s | 13,078 msg/s | 14.08 ms | 18.48 ms | 0.84 ms |
-| `backpressure_smoke` | `threaded` | 8 | 64 KiB | 256 | 812.25 MiB/s | 12,996 msg/s | 9.83 ms | 13.02 ms | 0.80 ms |
-| `large_payload_throughput` | `py-netty` | 16 | 64 KiB | 512 | 620.71 MiB/s | 9,931 msg/s | 37.45 ms | 47.49 ms | 3.01 ms |
-| `large_payload_throughput` | `asyncio` | 16 | 64 KiB | 512 | 751.79 MiB/s | 12,029 msg/s | 31.17 ms | 39.86 ms | 1.45 ms |
-| `large_payload_throughput` | `threaded` | 16 | 64 KiB | 512 | 785.02 MiB/s | 12,560 msg/s | 19.12 ms | 27.11 ms | 1.64 ms |
-| `small_payload_concurrency` | `py-netty` | 32 | 1 KiB | 6,400 | 49.05 MiB/s | 50,230 msg/s | 110.78 ms | 117.80 ms | 14.97 ms |
-| `small_payload_concurrency` | `asyncio` | 32 | 1 KiB | 6,400 | 77.80 MiB/s | 79,665 msg/s | 43.25 ms | 69.66 ms | 2.78 ms |
-| `small_payload_concurrency` | `threaded` | 32 | 1 KiB | 6,400 | 35.56 MiB/s | 36,416 msg/s | 88.69 ms | 117.45 ms | 2.39 ms |
-| `connection_ramp_up` | `py-netty` | 64 | 64 B | 64 | 0.93 MiB/s | 15,272 msg/s | 3.18 ms | 3.95 ms | 12.93 ms |
-| `connection_ramp_up` | `asyncio` | 64 | 64 B | 64 | 1.28 MiB/s | 20,967 msg/s | 1.44 ms | 1.60 ms | 5.02 ms |
-| `connection_ramp_up` | `threaded` | 64 | 64 B | 64 | 0.59 MiB/s | 9,691 msg/s | 2.71 ms | 5.48 ms | 4.18 ms |
+| `single_connection_latency` | `py-netty` | 1 | 64 B | 200 | 0.53 MiB/s | 8,754 msg/s | 0.10 ms | 0.18 ms | 0.54 ms |
+| `single_connection_latency` | `asyncio` | 1 | 64 B | 200 | 0.61 MiB/s | 9,968 msg/s | 0.09 ms | 0.13 ms | 0.36 ms |
+| `single_connection_latency` | `threaded` | 1 | 64 B | 200 | 1.48 MiB/s | 24,198 msg/s | 0.04 ms | 0.05 ms | 1.59 ms |
+| `backpressure_smoke` | `py-netty` | 8 | 64 KiB | 256 | 300.67 MiB/s | 4,811 msg/s | 40.49 ms | 47.03 ms | 6.19 ms |
+| `backpressure_smoke` | `asyncio` | 8 | 64 KiB | 256 | 732.10 MiB/s | 11,714 msg/s | 15.62 ms | 20.29 ms | 1.02 ms |
+| `backpressure_smoke` | `threaded` | 8 | 64 KiB | 256 | 823.77 MiB/s | 13,180 msg/s | 8.97 ms | 11.51 ms | 0.90 ms |
+| `large_payload_throughput` | `py-netty` | 16 | 64 KiB | 512 | 787.83 MiB/s | 12,605 msg/s | 30.47 ms | 37.78 ms | 2.78 ms |
+| `large_payload_throughput` | `asyncio` | 16 | 64 KiB | 512 | 896.81 MiB/s | 14,349 msg/s | 25.72 ms | 33.34 ms | 1.27 ms |
+| `large_payload_throughput` | `threaded` | 16 | 64 KiB | 512 | 799.81 MiB/s | 12,797 msg/s | 18.75 ms | 25.12 ms | 1.32 ms |
+| `small_payload_concurrency` | `py-netty` | 32 | 1 KiB | 6,400 | 38.20 MiB/s | 39,121 msg/s | 138.20 ms | 154.94 ms | 15.80 ms |
+| `small_payload_concurrency` | `asyncio` | 32 | 1 KiB | 6,400 | 81.92 MiB/s | 83,889 msg/s | 40.98 ms | 66.23 ms | 2.43 ms |
+| `small_payload_concurrency` | `threaded` | 32 | 1 KiB | 6,400 | 36.10 MiB/s | 36,968 msg/s | 87.09 ms | 115.36 ms | 2.63 ms |
+| `connection_ramp_up` | `py-netty` | 64 | 64 B | 64 | 1.06 MiB/s | 17,332 msg/s | 2.64 ms | 3.24 ms | 20.28 ms |
+| `connection_ramp_up` | `asyncio` | 64 | 64 B | 64 | 1.00 MiB/s | 16,315 msg/s | 1.88 ms | 2.05 ms | 7.61 ms |
+| `connection_ramp_up` | `threaded` | 64 | 64 B | 64 | 0.58 MiB/s | 9,545 msg/s | 2.49 ms | 4.19 ms | 5.15 ms |
+
+### High Connection Scaling
+
+The high connection-count suite stresses 128, 256, and 512 concurrent localhost
+connections with 20 messages per connection and 1 KiB payloads. It highlights
+where py-netty's event-loop model pulls ahead of the one-thread-per-connection
+`threaded` implementation.
+
+In this run, py-netty kept a much steadier message rate as connection count
+increased, while the threaded implementation degraded more quickly. Compared
+with threaded sockets, py-netty delivered 24% higher message rate at 128
+connections, 48% higher at 256 connections, and 57% higher at 512 connections.
+This makes the 256-connection case the clearest inflection point for the
+threaded approach in this local test. `asyncio` is included as a standard
+library event-loop baseline and remained the fastest engine by raw message rate
+in these high-connection cases.
+
+| Case | Engine | Connections | Payload | Messages | Throughput | Message rate | p50 latency | p95 latency | Ramp-up |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `high_connection_128` | `py-netty` | 128 | 1 KiB | 2,560 | 45.45 MiB/s | 46,537 msg/s | 49.45 ms | 49.86 ms | 28.65 ms |
+| `high_connection_128` | `asyncio` | 128 | 1 KiB | 2,560 | 65.19 MiB/s | 66,753 msg/s | 20.37 ms | 31.71 ms | 35.85 ms |
+| `high_connection_128` | `threaded` | 128 | 1 KiB | 2,560 | 36.56 MiB/s | 37,442 msg/s | 25.44 ms | 55.51 ms | 9.38 ms |
+| `high_connection_256` | `py-netty` | 256 | 1 KiB | 5,120 | 45.72 MiB/s | 46,817 msg/s | 97.92 ms | 100.84 ms | 75.80 ms |
+| `high_connection_256` | `asyncio` | 256 | 1 KiB | 5,120 | 60.68 MiB/s | 62,134 msg/s | 42.07 ms | 67.71 ms | 118.30 ms |
+| `high_connection_256` | `threaded` | 256 | 1 KiB | 5,120 | 30.79 MiB/s | 31,534 msg/s | 25.04 ms | 34.16 ms | 47.32 ms |
+| `high_connection_512` | `py-netty` | 512 | 1 KiB | 10,240 | 40.85 MiB/s | 41,831 msg/s | 222.10 ms | 228.65 ms | 83.80 ms |
+| `high_connection_512` | `asyncio` | 512 | 1 KiB | 10,240 | 60.88 MiB/s | 62,346 msg/s | 86.16 ms | 135.54 ms | 64.47 ms |
+| `high_connection_512` | `threaded` | 512 | 1 KiB | 10,240 | 25.98 MiB/s | 26,606 msg/s | 53.93 ms | 94.08 ms | 121.09 ms |
 
 Metrics are informational and environment-dependent. The comparison uses three
 local implementations: `py-netty`, Python `asyncio`, and blocking sockets with

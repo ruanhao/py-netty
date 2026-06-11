@@ -18,6 +18,9 @@ Usage examples:
     # Run a ramp-up case on an explicit localhost port.
     python integration_tests/perf_echo.py --case connection_ramp_up --port 19080 --connections 128
 
+    # Run higher connection-count cases to find where threaded sockets fall behind.
+    python integration_tests/perf_echo.py --case high_connection_scaling --engine all --timeout 30
+
 Notes:
     The runner starts an in-process localhost echo server for each case and
     engine. Metrics are informational; the process exits non-zero only for
@@ -51,6 +54,7 @@ USAGE_EXAMPLES = """examples:
   python integration_tests/perf_echo.py --case all --engine all
   python integration_tests/perf_echo.py --case large_payload_throughput --connections 32 --messages 64
   python integration_tests/perf_echo.py --case connection_ramp_up --port 19080 --connections 128
+  python integration_tests/perf_echo.py --case high_connection_scaling --engine all --timeout 30
 
 notes:
   Each case starts an in-process localhost echo server for each selected engine.
@@ -123,6 +127,37 @@ DEFAULT_CASES: Dict[str, CaseSpec] = {
         messages=32,
         payload_size=64 * 1024,
     ),
+}
+
+HIGH_CONNECTION_CASES: Dict[str, CaseSpec] = {
+    "high_connection_128": CaseSpec(
+        name="high_connection_128",
+        connections=128,
+        messages=20,
+        payload_size=1024,
+    ),
+    "high_connection_256": CaseSpec(
+        name="high_connection_256",
+        connections=256,
+        messages=20,
+        payload_size=1024,
+    ),
+    "high_connection_512": CaseSpec(
+        name="high_connection_512",
+        connections=512,
+        messages=20,
+        payload_size=1024,
+    ),
+}
+
+CASE_GROUPS = {
+    "all": tuple(DEFAULT_CASES),
+    "high_connection_scaling": tuple(HIGH_CONNECTION_CASES),
+}
+
+ALL_CASES = {
+    **DEFAULT_CASES,
+    **HIGH_CONNECTION_CASES,
 }
 
 
@@ -744,7 +779,7 @@ def _print_result(result: CaseResult) -> None:
 
 
 def _parse_args() -> argparse.Namespace:
-    case_names = ["all"] + list(DEFAULT_CASES)
+    case_names = list(CASE_GROUPS) + list(ALL_CASES)
     engine_names = ["all", "py-netty", "asyncio", "threaded"]
     parser = argparse.ArgumentParser(
         description="Run local echo performance cases.",
@@ -765,7 +800,10 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    selected = list(DEFAULT_CASES.values()) if args.case == "all" else [DEFAULT_CASES[args.case]]
+    if args.case in CASE_GROUPS:
+        selected = [ALL_CASES[name] for name in CASE_GROUPS[args.case]]
+    else:
+        selected = [ALL_CASES[args.case]]
     engines = ["py-netty", "asyncio", "threaded"] if args.engine == "all" else [args.engine]
     results = []
 

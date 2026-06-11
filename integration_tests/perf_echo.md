@@ -90,6 +90,18 @@ Run a ramp-up case on an explicit local port:
 python integration_tests/perf_echo.py --case connection_ramp_up --port 19080 --connections 128
 ```
 
+Run the high connection-count scaling cases:
+
+```bash
+python integration_tests/perf_echo.py --case high_connection_scaling --engine all --timeout 30 --json
+```
+
+This group runs 128, 256, and 512 concurrent connections with 20 messages per
+connection and 1 KiB payloads. It is intended to show where the one-thread-per-connection
+`threaded` implementation starts losing ground to event-loop based
+implementations. The 512-connection case may require a higher file descriptor
+limit, for example `ulimit -n 4096`, before running the command.
+
 ## Pass And Fail Semantics
 
 The process exits with status `0` when all expected echoes are received and
