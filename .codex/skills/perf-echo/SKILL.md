@@ -34,6 +34,19 @@ Useful smoke command:
 python integration_tests/perf_echo.py --case single_connection_latency --messages 3 --payload-size 32 --timeout 5 --engine all
 ```
 
+Run py-netty clients with multiple event loops:
+
+```bash
+python integration_tests/perf_echo.py --case large_payload_throughput --engine py-netty --connections 32 --messages 64 --client-eventloops 2
+```
+
+Override the traffic pattern when needed:
+
+```bash
+python integration_tests/perf_echo.py --case large_payload_throughput --sequential
+python integration_tests/perf_echo.py --case single_connection_latency --no-sequential
+```
+
 Run against a separately deployed echo server:
 
 ```bash

@@ -82,10 +82,16 @@ Run a short latency case with JSON output:
 python integration_tests/perf_echo.py --case single_connection_latency --messages 20 --payload-size 64 --engine all --json
 ```
 
-Run a larger throughput case:
+Run a larger throughput case with two py-netty client event loops:
 
 ```bash
-python integration_tests/perf_echo.py --case large_payload_throughput --connections 32 --messages 64
+python integration_tests/perf_echo.py --case large_payload_throughput --connections 32 --messages 64 --client-eventloops 2
+```
+
+Force request/response traffic instead of the case default:
+
+```bash
+python integration_tests/perf_echo.py --case large_payload_throughput --sequential
 ```
 
 Run a ramp-up case against a separately deployed echo server:

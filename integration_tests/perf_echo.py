@@ -13,7 +13,10 @@ Usage examples:
     python integration_tests/perf_echo.py --case all --engine all
 
     # Run a larger throughput case with custom concurrency and message count.
-    python integration_tests/perf_echo.py --case large_payload_throughput --connections 32 --messages 64
+    python integration_tests/perf_echo.py --case large_payload_throughput --connections 32 --messages 64 --client-eventloops 2
+
+    # Force request/response traffic instead of burst traffic.
+    python integration_tests/perf_echo.py --case large_payload_throughput --sequential
 
     # Run a ramp-up case against a separately deployed echo server.
     # > go install github.com/wfscot/tcp-echo-server@latest
@@ -54,7 +57,8 @@ USAGE_EXAMPLES = """examples:
   python integration_tests/perf_echo.py --case all
   python integration_tests/perf_echo.py --case single_connection_latency --messages 20 --payload-size 64 --json
   python integration_tests/perf_echo.py --case all --engine all
-  python integration_tests/perf_echo.py --case large_payload_throughput --connections 32 --messages 64
+  python integration_tests/perf_echo.py --case large_payload_throughput --connections 32 --messages 64 --client-eventloops 2
+  python integration_tests/perf_echo.py --case large_payload_throughput --sequential
   python integration_tests/perf_echo.py --case connection_ramp_up --port 19080 --connections 128
   python integration_tests/perf_echo.py --case high_connection_scaling --engine all --timeout 30
 
@@ -410,8 +414,8 @@ def _apply_overrides(spec: CaseSpec, args: argparse.Namespace) -> CaseSpec:
         connections=args.connections or spec.connections,
         messages=args.messages or spec.messages,
         payload_size=args.payload_size or spec.payload_size,
-        sequential=spec.sequential,
-        client_eventloops=spec.client_eventloops,
+        sequential=spec.sequential if args.sequential is None else args.sequential,
+        client_eventloops=args.client_eventloops or spec.client_eventloops,
     )
 
 
@@ -833,12 +837,34 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--connections", type=int, default=None)
     parser.add_argument("--messages", type=int, default=None)
     parser.add_argument("--payload-size", type=int, default=None)
+    sequential_group = parser.add_mutually_exclusive_group()
+    sequential_group.add_argument(
+        "--sequential",
+        dest="sequential",
+        action="store_true",
+        default=None,
+        help="Send one frame and wait for its echo before sending the next frame.",
+    )
+    sequential_group.add_argument(
+        "--no-sequential",
+        dest="sequential",
+        action="store_false",
+        help="Send frames in a burst before reading echoes.",
+    )
+    parser.add_argument(
+        "--client-eventloops",
+        type=int,
+        default=None,
+        help="Number of client event loops for the py-netty engine. Defaults to 1.",
+    )
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON results.")
     args = parser.parse_args()
     if host_provided and args.port is None:
         parser.error("--port is required when --host is provided.")
     if args.port is not None and not 0 < args.port < 65536:
         parser.error("--port must be between 1 and 65535.")
+    if args.client_eventloops is not None and args.client_eventloops < 1:
+        parser.error("--client-eventloops must be at least 1.")
     return args
 
 
