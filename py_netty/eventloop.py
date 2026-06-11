@@ -9,7 +9,7 @@ import threading
 from .eventfd import eventfd
 from concurrent.futures import ThreadPoolExecutor
 from .utils import create_thread_pool, sockinfo, log, LoggerAdapter, flag_to_str
-from .channel import ChannelFuture, AbstractChannel
+from .channel import ChannelFuture, AbstractChannel, _DEFAULT_HIGH_WATER_MARK
 from typing import List, Tuple
 import os
 import inspect
@@ -176,6 +176,70 @@ class EventLoop:
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("task finished in %sms: \n%s", int((time.time() - start) * 1000), inspect.getsource(task))
             self._total_tasks_processed += 1
+
+    def _pending_write_batch(self, chunks):
+        batch = []
+        total_bytes = 0
+        for chunk in chunks:
+            if chunk.close:
+                break
+            chunk_bytes = len(chunk.buffer)
+            if batch and total_bytes + chunk_bytes > _DEFAULT_HIGH_WATER_MARK:
+                break
+            batch.append(chunk)
+            total_bytes += chunk_bytes
+            if total_bytes >= _DEFAULT_HIGH_WATER_MARK:
+                break
+        return batch, total_bytes
+
+    def _send_pending_chunks(self, channel):
+        chunks = channel.pendings()
+        while chunks:
+            while chunks and not chunks[0].close and not chunks[0].buffer:
+                chunks[0].future.set_result(True)
+                chunks = chunks[1:]
+            if not chunks:
+                break
+
+            if chunks[0].close:
+                logger.debug("process chunk with close indicator: %s", channel)
+                self._close_channel_internally(channel, 'chunk with close indicator')
+                return
+
+            batch, batch_bytes = self._pending_write_batch(chunks)
+            if not batch:
+                break
+            if len(batch) == 1:
+                buffer = batch[0].buffer
+            else:
+                buffer = b''.join(chunk.buffer for chunk in batch)
+
+            remaining = channel.try_send(buffer)
+            sent_bytes = batch_bytes - len(remaining)
+            self._total_sent += sent_bytes
+            channel._pending_bytes -= sent_bytes
+
+            if sent_bytes <= 0:
+                break
+
+            completed = 0
+            bytes_left = sent_bytes
+            for chunk in batch:
+                chunk_bytes = len(chunk.buffer)
+                if bytes_left >= chunk_bytes:
+                    bytes_left -= chunk_bytes
+                    completed += 1
+                    chunk.future.set_result(True)
+                    continue
+                chunk.buffer = chunk.buffer[bytes_left:]
+                break
+
+            chunks = chunks[completed:]
+            if completed < len(batch):
+                # Stop this write pass when a chunk is only partially sent; keep the tail for the next writable event.
+                break
+
+        channel.set_pendings(chunks)
 
     def _fail_channel_work(self, channel, exception):
         channel_future = channel.channel_future()
@@ -466,27 +530,8 @@ class EventLoop:
                     if not channel.has_pendings():  # has no pending chunks
                         channel.remove_flag(selectors.EVENT_WRITE)
                     else:
-                        chunks = channel.pendings()
-                        while True:
-                            head, *tail = chunks
-                            if head.close:  # denote to close locally
-                                logger.debug("process chunk with close indicator: %s", channel)
-                                self._close_channel_internally(channel, 'chunk with close indicator')
-                                break
-                            l0 = len(head.buffer)
-                            head.buffer = channel.try_send(head.buffer)
-                            sent_bytes = l0 - len(head.buffer)
-                            self._total_sent += sent_bytes
-                            channel._pending_bytes -= sent_bytes
-                            if not head.buffer:  # all data sent for this chunk
-                                chunks = tail
-                                head.future.set_result(True)
-                                if not chunks:  # no chunks left
-                                    break
-                            else:   # still has data to send later for this chunk
-                                break
-                        channel.set_pendings(chunks)
-                        if not channel.has_pendings():
+                        self._send_pending_chunks(channel)
+                        if fileno in self._channels and not channel.has_pendings():
                             channel.remove_flag(selectors.EVENT_WRITE)
                     channel._check_writability()
 

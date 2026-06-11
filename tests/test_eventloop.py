@@ -182,6 +182,7 @@ class FakeChannel:
         self.writability_checks = 0
         self.unregister_calls = 0
         self.try_send_results = []
+        self.try_send_buffers = []
         self.recv_results = []
         self.accept_results = []
         self._pendings = []
@@ -255,6 +256,7 @@ class FakeChannel:
         self._pending_bytes = 0
 
     def try_send(self, buffer):
+        self.try_send_buffers.append(buffer)
         if self.try_send_results:
             return self.try_send_results.pop(0)
         return b""
@@ -818,6 +820,45 @@ class TestTimeoutAndPolling:
         assert channel.close_future().done() is True
         with pytest.raises(OSError, match="bad status"):
             channel.channel_future().sync()
+
+
+class TestPendingWrites:
+
+    def test_send_pending_chunks_batches_adjacent_data_chunks(self, loop):
+        enter_loop(loop)
+        channel = FakeChannel(100)
+        first = Chunk(b"abc")
+        second = Chunk(b"de")
+        channel._pendings = [first, second]
+        channel._pending_bytes = 5
+
+        loop._send_pending_chunks(channel)
+
+        assert channel.try_send_buffers == [b"abcde"]
+        assert first.future.done() is True
+        assert second.future.done() is True
+        assert channel.pendings() == []
+        assert channel._pending_bytes == 0
+        assert loop._total_sent == 5
+
+    def test_send_pending_chunks_keeps_partially_sent_batch_tail(self, loop):
+        enter_loop(loop)
+        channel = FakeChannel(100)
+        first = Chunk(b"abc")
+        second = Chunk(b"de")
+        channel._pendings = [first, second]
+        channel._pending_bytes = 5
+        channel.try_send_results = [b"e"]
+
+        loop._send_pending_chunks(channel)
+
+        assert channel.try_send_buffers == [b"abcde"]
+        assert first.future.done() is True
+        assert second.future.done() is False
+        assert channel.pendings() == [second]
+        assert second.buffer == b"e"
+        assert channel._pending_bytes == 1
+        assert loop._total_sent == 4
 
 
 class TestStartLoop:
