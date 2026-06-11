@@ -4,21 +4,18 @@
 [![codecov](https://codecov.io/gh/ruanhao/py-netty/branch/main/graph/badge.svg)](https://codecov.io/gh/ruanhao/py-netty)
 [![Downloads](https://static.pepy.tech/badge/py-netty)](https://pepy.tech/project/py-netty)
 
-An event-driven TCP networking framework.
 
-Ideas and concepts under the hood are built upon those of [Netty](https://netty.io/), especially the IO and executor model.
-
-APIs are designed to feel familiar to Netty users.
-
+`py-netty` is a lightweight [Netty](https://netty.io/)-style, event-driven TCP networking framework for Python, focused on non-blocking socket programming with callback-based channel handlers.
 
 # Features
 
-- callback based application invocation
-- non blocking IO
-- recv/write is performed only in IO thread
-- adaptive read buffer 
-- low/higher water mark to indicate writability (default low water mark is 32K and high water mark is 64K)
-- all platform supported (linux: epoll, mac: kqueue, windows: select)
+- **Netty-style programming model**: build TCP clients and servers with `Bootstrap`, `ServerBootstrap`, `EventLoopGroup`, `Channel`, and callback-based `ChannelHandler` APIs.
+- **Non-blocking TCP I/O**: sockets are managed by selector-backed event loops, keeping application code event-driven instead of thread-per-connection.
+- **Thread-confined socket operations**: `recv` and `write` are performed from the owning I/O thread, making channel behavior predictable under concurrency.
+- **Backpressure-aware writes**: low and high water marks expose channel writability changes, with defaults of 32 KiB and 64 KiB.
+- **Adaptive read buffering**: read buffer sizes grow or shrink based on recent traffic patterns to balance throughput and memory usage.
+- **TLS support for clients and servers**: wrap TCP channels with SSL/TLS, including optional certificate verification and custom SSL context hooks.
+- **Cross-platform selector support**: uses the best selector available on each platform, such as epoll on Linux, kqueue on macOS, and select on Windows.
 
 ## Installation
 

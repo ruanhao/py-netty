@@ -6,7 +6,7 @@ this_directory = Path(__file__).parent
 long_description = (this_directory / "README.md").read_text()
 # install_requires = (this_directory / 'requirements.txt').read_text().splitlines()
 
-version = '1.1.0'
+version = '1.1.1'
 
 config = {
     'name': 'py-netty',
@@ -21,7 +21,7 @@ config = {
     'version': version,
     'packages': find_packages(),
     'install_requires': ['attrs', 'pysocks'],
-    'python_requires': ">=3.7, <4",
+    'python_requires': ">=3.10, <4",
     'setup_requires': ['wheel'],
     'classifiers': [
         "Intended Audience :: Developers",
@@ -30,9 +30,6 @@ config = {
         "Operating System :: OS Independent",
         "Programming Language :: Python",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
