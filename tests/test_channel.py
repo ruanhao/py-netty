@@ -96,6 +96,27 @@ class FakeSocket:
         return ("127.0.0.1", 10001)
 
 
+class NoTcpNoDelaySocket(FakeSocket):
+
+    def setsockopt(self, *args):
+        raise OSError("unsupported option")
+
+
+class NoPeerSocket(FakeSocket):
+
+    def getpeername(self):
+        raise OSError("not connected")
+
+
+class BrokenInfoSocket(NoPeerSocket):
+
+    def getsockname(self):
+        raise OSError("closed")
+
+    def __str__(self):
+        return "socket-left - socket-right"
+
+
 class FakeServerSocket(FakeSocket):
 
     def __init__(self, accepted):
@@ -143,6 +164,12 @@ class RaisingReadHandler(RecordingHandler):
 
     def channel_read(self, ctx, msg):
         raise RuntimeError("read failed")
+
+
+class RaisingExceptionHandler(RecordingHandler):
+
+    def exception_caught(self, ctx, exception):
+        raise RuntimeError("exception handler failed")
 
 
 class StubChannel:
@@ -249,14 +276,37 @@ class TestChannelFuture:
         exception = OSError("connect failed")
 
         future.set_exception(exception)
+        future.set_exception(OSError("ignored"))
         future.set(channel)
 
         assert future.done() is True
         with pytest.raises(OSError, match="connect failed"):
             future.sync()
 
+    def test_close_future_delegates_to_channel_close_future(self):
+        channel = make_channel()
+        future = ChannelFuture(channel)
+
+        assert future.close_future() is channel.close_future()
+
 
 class TestAbstractChannelFlags:
+
+    def test_basic_accessors_delegate_to_eventloop_and_socket(self):
+        eventloop = FakeEventLoop()
+        channel = make_channel(eventloop)
+
+        assert channel.channel_future().channel() is channel
+        assert channel.eventloop() is eventloop
+        assert channel.context().channel() is channel
+        assert channel.socket() is channel._socket
+        assert channel.fileno() == channel._socket.fileno()
+        assert channel.fileno0() == 42
+
+        assert channel.register() is channel.channel_future()
+        assert channel.unregister() is channel.channel_future()
+        assert eventloop.registered == [channel]
+        assert eventloop.unregistered == [channel]
 
     def test_add_flag_submits_task_when_not_in_eventloop(self):
         eventloop = FakeEventLoop(in_loop=False)
@@ -293,6 +343,17 @@ class TestAbstractChannelFlags:
         assert channel.flag() == selectors.EVENT_WRITE
         assert eventloop.modified == []
         assert "selector closed" in caplog.text
+
+    def test_add_and_remove_flag_log_debug_when_enabled(self, caplog):
+        caplog.set_level("DEBUG", logger="py_netty.channel")
+        eventloop = FakeEventLoop()
+        channel = make_channel(eventloop)
+
+        channel.add_flag(selectors.EVENT_READ)
+        channel.remove_flag(selectors.EVENT_READ)
+
+        assert "add flag" in caplog.text
+        assert "remove flag" in caplog.text
 
     def test_remove_flag_submits_task_when_not_in_eventloop(self):
         eventloop = FakeEventLoop(in_loop=False)
@@ -381,6 +442,85 @@ class TestAbstractChannelSetActive:
         assert channel.is_active() is True
         assert handler.events == []
 
+    def test_is_active_is_false_after_close_future_completes(self):
+        channel = make_channel()
+        channel.set_active(True)
+
+        channel.close_future().set(channel)
+
+        assert channel.is_active() is False
+
+
+class TestAbstractChannelClose:
+
+    def test_close_dispatches_force_and_graceful_paths(self):
+        eventloop = FakeEventLoop()
+        channel = make_channel(eventloop)
+
+        channel.close(force=True)
+        channel.close(force=False)
+
+        assert eventloop.closed == [
+            (channel, "close channel forcibly"),
+        ]
+
+    def test_close_forcibly_submits_task_outside_eventloop(self):
+        eventloop = FakeEventLoop(in_loop=False)
+        channel = make_channel(eventloop)
+
+        future = channel.close_forcibly()
+
+        assert future is channel.close_future()
+        assert eventloop.closed == []
+        assert len(eventloop.tasks) == 1
+
+        eventloop.in_loop = True
+        eventloop.tasks[0]()
+        assert eventloop.closed == [(channel, "close channel forcibly")]
+
+    def test_close_gracefully_submits_task_outside_eventloop(self):
+        eventloop = FakeEventLoop(in_loop=False)
+        channel = make_channel(eventloop)
+
+        future = channel.close_gracefully()
+
+        assert future is channel.close_future()
+        assert channel.pendings() == []
+        assert len(eventloop.tasks) == 1
+
+    def test_close_gracefully_returns_close_future_when_inactive(self):
+        eventloop = FakeEventLoop()
+        channel = make_channel(eventloop)
+
+        future = channel.close_gracefully()
+
+        assert future is channel.close_future()
+        assert channel.pendings() == []
+        assert eventloop.closed == []
+
+    def test_close_gracefully_closes_active_server_channel(self):
+        eventloop = FakeEventLoop()
+        channel = NioServerSocketChannel(eventloop, FakeServerSocket([]), RecordingHandler)
+        channel.set_active(True)
+
+        future = channel.close_gracefully()
+
+        assert future is channel.close_future()
+        assert eventloop.closed == [(channel, "close server channel gracefully")]
+
+    def test_close_gracefully_enqueues_close_chunk_for_active_client(self):
+        eventloop = FakeEventLoop()
+        channel = make_channel(eventloop)
+        channel.set_active(True)
+
+        future = channel.close_gracefully()
+
+        assert future is channel.close_future()
+        assert len(channel.pendings()) == 1
+        assert channel.pendings()[0].close is True
+        assert channel.pendings()[0].future is channel.close_future().future
+
+
 class TestNioSocketChannel:
 
     def test_initial_state(self):
@@ -395,6 +535,22 @@ class TestNioSocketChannel:
         assert channel.has_pendings() is False
         assert channel.connect_timeout_millis() == 3000
         assert sock.setsockopt_calls
+
+    def test_ignores_tcp_nodelay_configuration_errors(self):
+        channel = make_channel(sock=NoTcpNoDelaySocket())
+
+        assert channel.is_writable() is True
+
+    def test_ssl_handshake_state_helpers(self):
+        channel = make_channel()
+        channel._ssl_handshake_required = True
+        channel._ssl_handshake_complete = False
+
+        assert channel.needs_ssl_handshake() is True
+
+        channel.set_ssl_handshake_complete()
+
+        assert channel.needs_ssl_handshake() is False
 
     def test_add_pending_ignores_none_and_empty_non_close_chunks(self):
         channel = make_channel()
@@ -466,6 +622,14 @@ class TestNioSocketChannel:
         assert channel.pendings() == []
         assert channel._pending_bytes == 0
 
+    def test_set_pendings_replaces_pending_list(self):
+        channel = make_channel()
+        chunks = [Chunk(b"abc")]
+
+        channel.set_pendings(chunks)
+
+        assert channel.pendings() is chunks
+
     def test_set_auto_read_toggles_read_flag(self):
         eventloop = FakeEventLoop()
         channel = make_channel(eventloop)
@@ -506,6 +670,15 @@ class TestNioSocketChannel:
         assert channel.try_send(b"abcdef") == b"cdef"
         assert sock.sent == [b"abcdef", b"cdef", b"cdef"]
 
+    def test_try_send_logs_socket_error_in_debug(self, caplog):
+        caplog.set_level("DEBUG", logger="py_netty.channel")
+        error = OSError(errno.EAGAIN, "try again")
+        sock = FakeSocket(send_results=[error])
+        channel = make_channel(sock=sock)
+
+        assert channel.try_send(b"abc", spin=0) == b"abc"
+        assert "try_send socket.error" in caplog.text
+
     def test_try_send_empty_bytes_returns_empty_bytes(self):
         channel = make_channel()
 
@@ -524,11 +697,71 @@ class TestNioSocketChannel:
 
         assert channel.recvall() == (b"hello", False)
 
+    def test_recvall_continues_after_readable_socket_error(self, caplog):
+        caplog.set_level("DEBUG", logger="py_netty.channel")
+        error = OSError(errno.EAGAIN, "try again")
+        sock = FakeSocket(recv_chunks=[error, b""], peek_result=b"x")
+        channel = make_channel(sock=sock)
+
+        assert channel.recvall() == (b"", True)
+        assert "recvall socket.error" in caplog.text
+
+    def test_recvall_debug_logs_when_yielding_for_slow_read(self, monkeypatch, caplog):
+        caplog.set_level("DEBUG", logger="py_netty.channel")
+        sock = FakeSocket(recv_chunks=[b"hello"])
+        channel = make_channel(sock=sock)
+        times = iter([1.0, 1.02])
+        monkeypatch.setattr(channel_module.time, "perf_counter", lambda: next(times))
+
+        assert channel.recvall() == (b"hello", False)
+        assert "yield from recvall" in caplog.text
+
     def test_is_readable_uses_peek_without_consuming_data(self, monkeypatch):
         monkeypatch.setattr(channel_module.socket, "MSG_DONTWAIT", 0, raising=False)
 
         assert make_channel(sock=FakeSocket(peek_result=b"x")).is_readable() is True
         assert make_channel(sock=FakeSocket(peek_result=b"")).is_readable() is False
+        assert make_channel(sock=FakeSocket(peek_result=OSError("closed"))).is_readable() is False
+
+
+class TestChannelStringRepresentation:
+
+    def test_channelinfo_lazily_populates_original_socket_info(self):
+        channel = make_channel()
+        channel._channelinfo = None
+
+        assert channel.channelinfo() is not None
+
+    def test_str_uses_question_mark_before_first_activation(self):
+        channel = make_channel()
+
+        assert " ? " in str(channel)
+
+    def test_str_uses_exclamation_mark_after_inactive(self):
+        channel = make_channel()
+        channel.set_active(True)
+        channel.set_active(False)
+
+        assert " ! " in str(channel)
+
+    def test_str_falls_back_to_sockinfo_when_channelinfo_unavailable_before_active(self):
+        channel = make_channel(sock=BrokenInfoSocket())
+
+        assert "?" in str(channel)
+
+    def test_str_falls_back_to_sockinfo_when_channelinfo_unavailable_after_inactive(self):
+        channel = make_channel(sock=BrokenInfoSocket())
+        channel._ever_active = True
+        channel._active = False
+
+        assert "!" in str(channel)
+
+    def test_str_returns_sockinfo_when_channelinfo_unavailable_and_active(self):
+        channel = make_channel(sock=BrokenInfoSocket())
+        channel._ever_active = True
+        channel._active = True
+
+        assert str(channel) == channel._sockinfo
 
 
 class TestChannelContext:
@@ -556,6 +789,9 @@ class TestChannelHandlerContext:
         assert ctx.handler() is handler
         assert ctx.write(b"payload") == "write-result"
         assert channel.writes == [b"payload"]
+
+        ctx.close()
+        assert channel.closed is True
 
     @pytest.mark.parametrize(
         "fire_method,expected_event,args",
@@ -586,6 +822,14 @@ class TestChannelHandlerContext:
         assert len(handler.exceptions) == 1
         assert str(handler.exceptions[0]) == "read failed"
 
+    def test_fire_exception_caught_logs_when_exception_handler_raises(self, caplog):
+        handler = RaisingExceptionHandler()
+        ctx = ChannelHandlerContext(StubChannel(handler))
+
+        ctx.fire_exception_caught(RuntimeError("original"))
+
+        assert "Exception caught while handling exception" in caplog.text
+
 
 class TestNioServerSocketChannel:
 
@@ -593,6 +837,8 @@ class TestNioServerSocketChannel:
         channel = NioServerSocketChannel(FakeEventLoop(), FakeServerSocket([]), RecordingHandler)
 
         assert channel.is_server() is True
+        assert channel.needs_ssl_handshake() is False
+        assert channel.set_ssl_handshake_complete() is None
 
     def test_acceptall_returns_accepted_connections_until_socket_error(self):
         accepted = [
