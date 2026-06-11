@@ -67,12 +67,14 @@ class EventLoop:
             return
 
         try:
-            self._selector.get_key(fileno)
+            key = self._selector.get_key(fileno)
         except KeyError:
             if channel.socket().fileno() == -1:
                 return
             self._selector.register(channel, flag)
         else:
+            if key.events == flag:
+                return
             self._selector.modify(fileno, flag)
 
     def submit_task(self, task):

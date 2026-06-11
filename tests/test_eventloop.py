@@ -389,6 +389,16 @@ class TestModifyFlag:
 
         assert loop._selector.modified == [(channel.fileno(), selectors.EVENT_WRITE)]
 
+    def test_modify_flag_skips_existing_key_when_events_are_unchanged(self, loop):
+        enter_loop(loop)
+        channel = FakeChannel()
+        channel._flag = selectors.EVENT_READ
+        loop._selector.register(channel, selectors.EVENT_READ)
+
+        loop.modify_flag(channel)
+
+        assert loop._selector.modified == []
+
 
 class TestRegisterAndUnregister:
 
