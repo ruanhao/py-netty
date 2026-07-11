@@ -17,6 +17,29 @@ def _handler_initializer():
     return EchoChannelHandler()
 
 
+def _resolve_tcp_addresses(address, port, flags=0):
+    return socket.getaddrinfo(
+        address,
+        port,
+        socket.AF_UNSPEC,
+        socket.SOCK_STREAM,
+        0,
+        flags,
+    )
+
+
+def _resolve_tcp_address(address, port, flags=0):
+    return _resolve_tcp_addresses(address, port, flags)[0]
+
+
+def _is_ipv6_address(address):
+    try:
+        socket.inet_pton(socket.AF_INET6, address)
+        return True
+    except (OSError, TypeError):
+        return False
+
+
 @lru_cache(maxsize=8)
 def _client_ssl_context(verify=True):
     if verify:
@@ -61,19 +84,38 @@ class Bootstrap:
 
     def connect(self, address, port, ensure_connected: bool = False, sni: str | None = None, use_socksocket: bool = False) -> ChannelFuture:
         # if use_socksocket is enabled, please make sure socks.set_default_proxy() is prepared beforehand
-        sock = (socks.socksocket if use_socksocket else socket.socket)(socket.AF_INET, socket.SOCK_STREAM)
+        socket_factory = socks.socksocket if use_socksocket else socket.socket
+        if use_socksocket and not _is_ipv6_address(address):
+            resolved_addresses = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", (address, port))]
+        else:
+            resolved_addresses = _resolve_tcp_addresses(address, port)
+        last_error = None
+        sock = None
 
         # if ensure_connected or self.tls:
-        if ensure_connected:
-            sock.connect((address, port))
-            if self.tls:
-                sock = self._wrap_ssl_socket(sock, address, sni)
-            sock.setblocking(False)
+        for family, socktype, proto, _canonname, sockaddr in resolved_addresses:
+            sock = socket_factory(family, socktype, proto)
+            try:
+                if ensure_connected:
+                    sock.connect(sockaddr)
+                    if self.tls:
+                        sock = self._wrap_ssl_socket(sock, address, sni)
+                    sock.setblocking(False)
+                else:
+                    sock.setblocking(False)
+                    if self.tls:
+                        sock = self._wrap_ssl_socket(sock, address, sni)
+                    sock.connect_ex(sockaddr)  # non blocking
+                break
+            except Exception as e:
+                last_error = e
+                try:
+                    sock.close()
+                except Exception:
+                    pass
         else:
-            sock.setblocking(False)
-            if self.tls:
-                sock = self._wrap_ssl_socket(sock, address, sni)
-            sock.connect_ex((address, port))  # non blocking
+            raise last_error or OSError(f"Could not resolve TCP address: {address}:{port}")
+
         return NioSocketChannel(
             self.eventloop_group.get_eventloop(),
             sock,
@@ -94,7 +136,8 @@ class ServerBootstrap:
     def bind(self, address='localhost', port=-1) -> ChannelFuture:
         assert port > 0
         assert ((self.certfile is not None) ^ (self.keyfile is not None)) is False, "Both certfile and keyfile must be specified"
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        family, socktype, proto, _canonname, sockaddr = _resolve_tcp_address(address, port, socket.AI_PASSIVE)
+        server_socket = socket.socket(family, socktype, proto)
         ssl_ctx = None
         if self.certfile and self.keyfile:
             ssl_ctx = _server_ssl_context(self.certfile, self.keyfile)
@@ -104,7 +147,7 @@ class ServerBootstrap:
                 except Exception as e:
                     logger.error("Error in ssl_context_cb(server): %s", e)
         server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_socket.bind((address, port))
+        server_socket.bind(sockaddr)
         server_socket.listen(128)
         server_socket.setblocking(0)
         eventloop = self.parent_group.get_eventloop()

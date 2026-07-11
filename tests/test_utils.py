@@ -45,6 +45,24 @@ class TestSockInfo:
         closed_sock.close()
         assert sockinfo(closed_sock) == str(closed_sock)
 
+    def test_sockinfo_formats_ipv6_sockaddr(self):
+        class FakeIpv6Socket:
+            def fileno(self):
+                return 100
+
+            def getsockname(self):
+                return ("::1", 12345, 0, 0)
+
+            def getpeername(self):
+                return ("2001:db8::1", 443, 0, 0)
+
+        sock = FakeIpv6Socket()
+
+        assert sockinfo(sock) == (
+            f"[id: {hex(id(sock))}, fd: 100, "
+            "L:/[::1]:12345 - R:/[2001:db8::1]:443]"
+        )
+
 
 class TestFlagToStr:
 

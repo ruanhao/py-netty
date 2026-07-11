@@ -43,6 +43,9 @@ class FakeSocket:
     def listen(self, backlog):
         self.listen_backlogs.append(backlog)
 
+    def close(self):
+        self.closed = True
+
     def fileno(self):
         return 100
 
@@ -230,6 +233,19 @@ class TestBootstrapConnect:
 
     def patch_connect_dependencies(self, monkeypatch, sock):
         group = FakeEventLoopGroup("client-loop")
+        monkeypatch.setattr(
+            bootstrap_module,
+            "_resolve_tcp_addresses",
+            lambda address, port: [
+                (
+                    bootstrap_module.socket.AF_INET,
+                    bootstrap_module.socket.SOCK_STREAM,
+                    0,
+                    "",
+                    (address, port),
+                )
+            ],
+        )
         monkeypatch.setattr(bootstrap_module.socket, "socket", lambda *args: sock)
         monkeypatch.setattr(bootstrap_module, "NioSocketChannel", FakeNioSocketChannel)
         return group
@@ -309,6 +325,11 @@ class TestBootstrapConnect:
     def test_connect_can_use_socksocket(self, monkeypatch):
         plain_sock = FakeSocket("plain")
         socks_sock = FakeSocket("socks")
+        monkeypatch.setattr(
+            bootstrap_module,
+            "_resolve_tcp_addresses",
+            lambda address, port: pytest.fail("SOCKS hostnames should not be resolved locally"),
+        )
         monkeypatch.setattr(bootstrap_module.socket, "socket", lambda *args: plain_sock)
         monkeypatch.setattr(bootstrap_module.socks, "socksocket", lambda *args: socks_sock)
         monkeypatch.setattr(bootstrap_module, "NioSocketChannel", FakeNioSocketChannel)
@@ -320,12 +341,60 @@ class TestBootstrapConnect:
         assert socks_sock.connect_ex_calls == [("example.com", 80)]
         assert FakeNioSocketChannel.instances[-1].sock is socks_sock
 
+    def test_connect_ipv6_uses_resolved_ipv6_sockaddr(self, monkeypatch):
+        sock = FakeSocket("ipv6")
+        socket_calls = []
+
+        monkeypatch.setattr(
+            bootstrap_module,
+            "_resolve_tcp_addresses",
+            lambda address, port: [
+                (
+                    bootstrap_module.socket.AF_INET6,
+                    bootstrap_module.socket.SOCK_STREAM,
+                    0,
+                    "",
+                    ("::1", port, 0, 0),
+                )
+            ],
+        )
+
+        def socket_factory(*args):
+            socket_calls.append(args)
+            return sock
+
+        monkeypatch.setattr(bootstrap_module.socket, "socket", socket_factory)
+        monkeypatch.setattr(bootstrap_module, "NioSocketChannel", FakeNioSocketChannel)
+        bootstrap = Bootstrap(eventloop_group=FakeEventLoopGroup("client-loop"))
+
+        bootstrap.connect("::1", 8080)
+
+        assert socket_calls == [
+            (
+                bootstrap_module.socket.AF_INET6,
+                bootstrap_module.socket.SOCK_STREAM,
+                0,
+            )
+        ]
+        assert sock.connect_ex_calls == [("::1", 8080, 0, 0)]
+
 
 class TestServerBootstrapBind:
 
     def patch_bind_dependencies(self, monkeypatch, server_socket):
         parent_group = FakeEventLoopGroup("parent-loop")
         child_group = FakeEventLoopGroup("child-loop")
+        monkeypatch.setattr(
+            bootstrap_module,
+            "_resolve_tcp_address",
+            lambda address, port, flags=0: (
+                bootstrap_module.socket.AF_INET,
+                bootstrap_module.socket.SOCK_STREAM,
+                0,
+                "",
+                (address, port),
+            ),
+        )
         monkeypatch.setattr(bootstrap_module.socket, "socket", lambda *args: server_socket)
         monkeypatch.setattr(bootstrap_module, "NioSocketChannel", FakeNioSocketChannel)
         monkeypatch.setattr(bootstrap_module, "NioServerSocketChannel", FakeNioServerSocketChannel)
@@ -366,6 +435,43 @@ class TestServerBootstrapBind:
         assert server_channel.registered is True
         assert parent_group.calls == 1
         assert child_group.calls == 0
+
+    def test_bind_ipv6_uses_resolved_ipv6_sockaddr(self, monkeypatch):
+        server_socket = FakeSocket("server-ipv6")
+        socket_calls = []
+        parent_group = FakeEventLoopGroup("parent-loop")
+        child_group = FakeEventLoopGroup("child-loop")
+        monkeypatch.setattr(
+            bootstrap_module,
+            "_resolve_tcp_address",
+            lambda address, port, flags=0: (
+                bootstrap_module.socket.AF_INET6,
+                bootstrap_module.socket.SOCK_STREAM,
+                0,
+                "",
+                ("::1", port, 0, 0),
+            ),
+        )
+
+        def socket_factory(*args):
+            socket_calls.append(args)
+            return server_socket
+
+        monkeypatch.setattr(bootstrap_module.socket, "socket", socket_factory)
+        monkeypatch.setattr(bootstrap_module, "NioSocketChannel", FakeNioSocketChannel)
+        monkeypatch.setattr(bootstrap_module, "NioServerSocketChannel", FakeNioServerSocketChannel)
+        bootstrap = ServerBootstrap(parent_group=parent_group, child_group=child_group)
+
+        bootstrap.bind(address="::1", port=8080)
+
+        assert socket_calls == [
+            (
+                bootstrap_module.socket.AF_INET6,
+                bootstrap_module.socket.SOCK_STREAM,
+                0,
+            )
+        ]
+        assert server_socket.bound == [("::1", 8080, 0, 0)]
 
     def test_bind_tls_configures_plain_listener_and_logs_callback_error(self, monkeypatch, caplog):
         raw_socket = FakeSocket("server")

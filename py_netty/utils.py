@@ -9,18 +9,26 @@ import selectors
 _counter = itertools.count()
 
 
+def _format_sockaddr(sockaddr):
+    address, port = sockaddr[:2]
+    if isinstance(address, str) and ':' in address:
+        return f"[{address}]:{port}"
+    return f"{address}:{port}"
+
+
 def sockinfo(sock):
     """Example: [id: 0xd829bade, L:/127.0.0.1:2069 - R:/127.0.0.1:55666]"""
     sock_id = hex(id(sock))
     fileno = sock.fileno()
     s_addr = None
     try:
-        s_addr, s_port = sock.getsockname()
-        d_addr, d_port = sock.getpeername()
-        return f"[id: {sock_id}, fd: {fileno}, L:/{s_addr}:{s_port} - R:/{d_addr}:{d_port}]"
+        sockname = sock.getsockname()
+        s_addr = sockname[:2]
+        peername = sock.getpeername()
+        return f"[id: {sock_id}, fd: {fileno}, L:/{_format_sockaddr(sockname)} - R:/{_format_sockaddr(peername)}]"
     except Exception:
         if s_addr:
-            return f"[id: {sock_id}, fd: {fileno}, L:/{s_addr}:{s_port}]"
+            return f"[id: {sock_id}, fd: {fileno}, L:/{_format_sockaddr(s_addr)}]"
         else:
             # return f"[id: {sock_id}, fd: {fileno}, CLOSED]"
             return str(sock)

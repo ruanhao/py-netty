@@ -6,7 +6,8 @@ this_directory = Path(__file__).parent
 long_description = (this_directory / "README.md").read_text()
 # install_requires = (this_directory / 'requirements.txt').read_text().splitlines()
 
-version = '1.1.1'
+# 1.1.2+ support ipv6
+version = '1.1.2'
 
 config = {
     'name': 'py-netty',
